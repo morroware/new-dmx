@@ -1,0 +1,1174 @@
+#!/usr/bin/env python3
+"""
+DMX Controller for DJPOWER H-IP20V Fog Machine
+16-channel mode with LED control and GPIO trigger
+"""
+
+from flask import Flask, jsonify, request, send_file
+import time
+import json
+import os
+import sys
+import glob
+import atexit
+import signal
+import tempfile
+from threading import Lock, Timer, Thread
+
+try:
+    from pyftdi.ftdi import Ftdi
+    FTDI_AVAILABLE = True
+except Exception as ftdi_import_error:
+    Ftdi = None
+    FTDI_AVAILABLE = False
+import importlib
+import importlib.util
+
+# Detect GPIO libraries (gpiod preferred, lgpio as fallback; works on Pi 4 & Pi 5)
+GPIO_AVAILABLE = False
+GPIO_LIB = None
+gpiod = None
+lgpio = None
+
+# Import ALL available GPIO libraries so init_gpio() can fall back between them.
+if importlib.util.find_spec("gpiod"):
+    try:
+        gpiod = importlib.import_module("gpiod")
+    except Exception:
+        gpiod = None
+
+if importlib.util.find_spec("lgpio"):
+    try:
+        lgpio = importlib.import_module("lgpio")
+    except Exception:
+        lgpio = None
+
+if gpiod is not None:
+    GPIO_AVAILABLE = True
+    GPIO_LIB = 'gpiod'
+elif lgpio is not None:
+    GPIO_AVAILABLE = True
+    GPIO_LIB = 'lgpio'
+else:
+    print("WARNING: No GPIO library available")
+
+app = Flask(__name__)
+
+# Path for persisting scene config across restarts
+CONFIG_DIR = os.environ.get("DMX_CONFIG_DIR", "/var/lib/dmx")
+CONFIG_FILE = os.environ.get(
+    "DMX_CONFIG_FILE",
+    os.path.join(CONFIG_DIR, "config.json"),
+)
+
+# ============================================
+# CONFIGURATION
+# ============================================
+
+class Config:
+    """Application configuration"""
+
+    # GPIO Settings
+    CONTACT_PIN = 17
+    SAFETY_SWITCH_PIN = 27
+    GPIO_CHIP = None  # Optional override: int index or string like "gpiochip0" or "/dev/gpiochip0"
+
+    # DMX Settings
+    DMX_CHANNELS = 512
+    DMX_REFRESH_RATE = 44
+    FTDI_URL = os.environ.get("DMX_FTDI_URL", "ftdi://0403:6001/1")
+
+    # Timing
+    SCENE_B_DURATION = 10.0  # seconds
+
+    # GPIO debounce - ignore transitions within this window
+    DEBOUNCE_TIME = 0.3  # seconds
+
+    # DJPOWER H-IP20V Fog Machine (16-channel mode)
+    # Full channel map:
+    # Ch1: Fog (0-9 Off, 10-255 On)
+    # Ch2: Disabled
+    # Ch3: Outer LED Red (0-9 Off, 10-255 Dim to bright)
+    # Ch4: Outer LED Green (0-9 Off, 10-255 Dim to bright)
+    # Ch5: Outer LED Blue (0-9 Off, 10-255 Dim to bright)
+    # Ch6: Outer LED Amber (0-9 Off, 10-255 Dim to bright)
+    # Ch7: Inner LED Red (0-9 Off, 10-255 Dim to bright)
+    # Ch8: Inner LED Green (0-9 Off, 10-255 Dim to bright)
+    # Ch9: Inner LED Blue (0-9 Off, 10-255 Dim to bright)
+    # Ch10: Inner LED Amber (0-9 Off, 10-255 Dim to bright)
+    # Ch11: LED Mix Color 1 (0-9 Off, 10-255 Mix color)
+    # Ch12: LED Mix Color 2 (0-9 Off, 10-255 Mix color)
+    # Ch13: LED Auto Color (0-9 Off, 10-255 Slow to fast)
+    # Ch14: Strobe (0-9 Off, 10-255 Slow to fast)
+    # Ch15: Dimmer (0-9 Off, 10-255 Dim to bright)
+    # Ch16: Safety Channel (0-49 Invalid, 50-200 Valid, 201-255 Invalid)
+
+    SCENES = {
+        'scene_a': {
+            'name': 'All OFF (Default)',
+            'channels': {
+                1: 0,     # Fog: Off
+                2: 0,     # Disabled
+                3: 0,     # Outer Red: Off
+                4: 0,     # Outer Green: Off
+                5: 0,     # Outer Blue: Off
+                6: 0,     # Outer Amber: Off
+                7: 0,     # Inner Red: Off
+                8: 0,     # Inner Green: Off
+                9: 0,     # Inner Blue: Off
+                10: 0,    # Inner Amber: Off
+                11: 0,    # LED Mix 1: Off
+                12: 0,    # LED Mix 2: Off
+                13: 0,    # Auto Color: Off
+                14: 0,    # Strobe: Off
+                15: 0,    # Dimmer: Off
+                16: 100,  # Safety: Valid
+            }
+        },
+        'scene_b': {
+            'name': 'Fog ON (Triggered)',
+            'channels': {
+                1: 255,   # Fog: Full
+                2: 0,     # Disabled
+                3: 255,   # Outer Red: Full
+                4: 255,   # Outer Green: Full
+                5: 255,   # Outer Blue: Full
+                6: 0,     # Outer Amber: Off
+                7: 255,   # Inner Red: Full
+                8: 255,   # Inner Green: Full
+                9: 255,   # Inner Blue: Full
+                10: 0,    # Inner Amber: Off
+                11: 0,    # LED Mix 1: Off
+                12: 0,    # LED Mix 2: Off
+                13: 0,    # Auto Color: Off
+                14: 0,    # Strobe: Off
+                15: 255,  # Dimmer: Full
+                16: 100,  # Safety: Valid
+            }
+        },
+        'scene_c': {
+            'name': 'Custom Scene 1',
+            'channels': {
+                1: 255,   # Fog: Full
+                2: 0,     # Disabled
+                3: 0,     # Outer Red: Off
+                4: 0,     # Outer Green: Off
+                5: 255,   # Outer Blue: Full
+                6: 0,     # Outer Amber: Off
+                7: 0,     # Inner Red: Off
+                8: 0,     # Inner Green: Off
+                9: 255,   # Inner Blue: Full
+                10: 0,    # Inner Amber: Off
+                11: 0,    # LED Mix 1: Off
+                12: 0,    # LED Mix 2: Off
+                13: 0,    # Auto Color: Off
+                14: 50,   # Strobe: Slow
+                15: 200,  # Dimmer: 80%
+                16: 100,  # Safety: Valid
+            }
+        },
+        'scene_d': {
+            'name': 'Custom Scene 2',
+            'channels': {
+                1: 200,   # Fog: High
+                2: 0,     # Disabled
+                3: 255,   # Outer Red: Full
+                4: 0,     # Outer Green: Off
+                5: 0,     # Outer Blue: Off
+                6: 200,   # Outer Amber: High
+                7: 255,   # Inner Red: Full
+                8: 0,     # Inner Green: Off
+                9: 0,     # Inner Blue: Off
+                10: 200,  # Inner Amber: High
+                11: 0,    # LED Mix 1: Off
+                12: 0,    # LED Mix 2: Off
+                13: 100,  # Auto Color: Medium
+                14: 0,    # Strobe: Off
+                15: 255,  # Dimmer: Full
+                16: 100,  # Safety: Valid
+            }
+        }
+    }
+
+config = Config()
+
+# ============================================
+# Config Persistence
+# ============================================
+
+def save_config():
+    """Save current scene config and duration to disk (atomic write)"""
+    try:
+        config_dir = os.path.dirname(CONFIG_FILE)
+        os.makedirs(config_dir, exist_ok=True)
+        data = {
+            'scene_b_duration': config.SCENE_B_DURATION,
+            'scenes': {}
+        }
+        for key, scene in config.SCENES.items():
+            data['scenes'][key] = {
+                'name': scene['name'],
+                'channels': {str(k): v for k, v in scene['channels'].items()}
+            }
+        # Write to temp file then atomically rename to prevent corruption
+        fd, tmp_path = tempfile.mkstemp(dir=config_dir, suffix='.tmp')
+        try:
+            with os.fdopen(fd, 'w') as f:
+                json.dump(data, f, indent=2)
+            os.replace(tmp_path, CONFIG_FILE)
+        except Exception:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
+    except Exception as e:
+        print(f"WARNING: Could not save config: {e}")
+
+
+def load_config():
+    """Load scene config from disk if it exists"""
+    if not os.path.exists(CONFIG_FILE):
+        return
+    try:
+        with open(CONFIG_FILE, 'r') as f:
+            data = json.load(f)
+        if 'scene_b_duration' in data:
+            config.SCENE_B_DURATION = float(data['scene_b_duration'])
+        if 'scenes' in data:
+            for key, scene in data['scenes'].items():
+                if key in config.SCENES:
+                    config.SCENES[key]['name'] = scene.get('name', config.SCENES[key]['name'])
+                    raw_channels = scene.get('channels', {})
+                    try:
+                        config.SCENES[key]['channels'] = _normalize_scene_channels(
+                            raw_channels,
+                            base_channels=config.SCENES[key]['channels'],
+                        )
+                    except (TypeError, ValueError) as e:
+                        print(f"WARNING: Invalid channel data in saved {key}; keeping previous values: {e}")
+        print("Loaded saved configuration from disk")
+    except Exception as e:
+        print(f"WARNING: Could not load config (using defaults): {e}")
+
+# ============================================
+# Global State
+# ============================================
+
+class SystemState:
+    """Global system state manager"""
+
+    def __init__(self):
+        self.ftdi_device = None
+        self.dmx_data = bytearray([0] * (config.DMX_CHANNELS + 1))
+        self.dmx_lock = Lock()
+        self.current_scene = None
+        self.scene_b_timer = None
+        self.timer_lock = Lock()  # Protects scene_b_timer access
+        self.gpio_line = None
+        self.gpio_safety_line = None
+        self.gpio_chip = None
+        self.gpio_chip_id = None
+        self.gpio_ready = False  # Explicit flag for GPIO readiness
+        self.dmx_thread = None
+        self.dmx_running = False
+        self.enttec_url = None
+        self.enttec_last_error = None
+
+state = SystemState()
+
+# ============================================
+# ENTTEC DMX Functions
+# ============================================
+
+def init_enttec():
+    """Initialize ENTTEC Open DMX USB"""
+    if not FTDI_AVAILABLE:
+        state.enttec_last_error = f"pyftdi unavailable: {ftdi_import_error}"
+        print(f"ERROR: {state.enttec_last_error}")
+        return False
+
+    def _candidate_urls(devices):
+        urls = []
+
+        # Always try explicitly configured URL first.
+        urls.append(config.FTDI_URL)
+
+        # Then try generic FTDI URLs that often work for single-device setups.
+        urls.extend([
+            "ftdi://::/1",
+            "ftdi://::/2",
+            "ftdi://0403:6001/1",
+            "ftdi://0403:6001/2",
+        ])
+
+        # Finally, try serial-targeted URLs from discovered devices.
+        for desc, _iface in devices:
+            serial = getattr(desc, 'sn', None)
+            if serial:
+                urls.append(f"ftdi://::{serial}/1")
+                urls.append(f"ftdi://::{serial}/2")
+
+        # De-dupe while preserving order.
+        return list(dict.fromkeys(urls))
+
+    try:
+        print("Initializing ENTTEC Open DMX USB...")
+
+        devices = Ftdi.list_devices()
+
+        if not devices:
+            print("ERROR: No FTDI devices found!")
+            state.enttec_last_error = "No FTDI devices found"
+            return False
+
+        print(f"Found {len(devices)} FTDI device(s)")
+        for idx, (desc, _iface) in enumerate(devices, start=1):
+            print(
+                f"  Device {idx}: vid=0x{getattr(desc, 'vid', 0):04x} "
+                f"pid=0x{getattr(desc, 'pid', 0):04x} "
+                f"serial={getattr(desc, 'sn', 'n/a')}"
+            )
+
+        last_error = None
+        for url in _candidate_urls(devices):
+            try:
+                ftdi = Ftdi()
+                ftdi.open_from_url(url)
+                state.ftdi_device = ftdi
+                state.enttec_url = url
+                state.enttec_last_error = None
+                print(f"Opened FTDI device with URL: {url}")
+                break
+            except Exception as e:
+                last_error = e
+                print(f"  FTDI open failed for {url}: {e}")
+
+        if state.ftdi_device is None:
+            hint = (
+                "Unable to open any detected FTDI device. "
+                "Make sure ftdi_sio is unloaded/blacklisted, udev permissions are set, "
+                "and DMX_FTDI_URL points at the correct adapter/interface."
+            )
+            state.enttec_last_error = f"{hint} Last error: {last_error}"
+            print(f"ERROR: {state.enttec_last_error}")
+            return False
+
+        # Configure for DMX512
+        state.ftdi_device.set_baudrate(250000)
+        state.ftdi_device.set_line_property(8, 2, 'N')
+        state.ftdi_device.set_latency_timer(1)
+
+        print("ENTTEC initialized successfully")
+        return True
+
+    except Exception as e:
+        state.enttec_last_error = str(e)
+        print(f"ERROR initializing ENTTEC: {e}")
+        return False
+
+
+def reinit_enttec():
+    """Attempt to re-initialize the ENTTEC after a failure"""
+    try:
+        if state.ftdi_device:
+            try:
+                state.ftdi_device.close()
+            except Exception:
+                pass
+            state.ftdi_device = None
+            state.enttec_url = None
+        return init_enttec()
+    except Exception as e:
+        print(f"ERROR re-initializing ENTTEC: {e}")
+        return False
+
+
+def dmx_refresh_thread():
+    """Background thread to continuously send DMX frames.
+
+    Automatically recovers from USB errors by re-initializing the ENTTEC device.
+    """
+    refresh_interval = 1.0 / config.DMX_REFRESH_RATE
+    consecutive_errors = 0
+    MAX_ERRORS_BEFORE_REINIT = 3
+    REINIT_BACKOFF = 2.0  # seconds to wait before attempting reinit
+    offline_backoff = 1.0
+    offline_backoff_max = 10.0
+
+    print(f"DMX refresh thread started ({config.DMX_REFRESH_RATE} Hz)")
+
+    while state.dmx_running:
+        try:
+            if state.ftdi_device is None:
+                raise Exception("FTDI device not available")
+            with state.dmx_lock:
+                # Send BREAK
+                state.ftdi_device.set_break(True)
+                time.sleep(0.000088)
+                state.ftdi_device.set_break(False)
+                time.sleep(0.000008)
+
+                # Send data
+                state.ftdi_device.write_data(state.dmx_data)
+
+            consecutive_errors = 0
+            offline_backoff = 1.0
+            time.sleep(refresh_interval)
+
+        except Exception as e:
+            consecutive_errors += 1
+            if "FTDI device not available" in str(e):
+                print(f"WARNING: DMX refresh offline: {e}")
+                time.sleep(offline_backoff)
+                offline_backoff = min(offline_backoff * 2, offline_backoff_max)
+                reinit_enttec()
+                continue
+
+            if consecutive_errors <= MAX_ERRORS_BEFORE_REINIT:
+                print(f"WARNING: DMX refresh error ({consecutive_errors}/{MAX_ERRORS_BEFORE_REINIT}): {e}")
+                time.sleep(0.1)
+                continue
+
+            # Too many consecutive errors - attempt to re-initialize
+            print(f"ERROR: {consecutive_errors} consecutive DMX failures. Attempting ENTTEC re-init...")
+            time.sleep(REINIT_BACKOFF)
+
+            if reinit_enttec():
+                print("ENTTEC re-initialized successfully, resuming DMX output")
+                consecutive_errors = 0
+            else:
+                print(f"ENTTEC re-init failed. Retrying in {REINIT_BACKOFF}s...")
+                # Keep looping - don't break out. Will retry on next iteration.
+
+    print("DMX refresh thread stopped")
+
+
+def start_dmx_refresh():
+    """Start background DMX refresh thread"""
+    if state.dmx_thread is None or not state.dmx_thread.is_alive():
+        state.dmx_running = True
+        state.dmx_thread = Thread(target=dmx_refresh_thread, daemon=True)
+        state.dmx_thread.start()
+
+
+def stop_dmx_refresh():
+    """Stop background DMX refresh thread"""
+    if state.dmx_thread is not None:
+        state.dmx_running = False
+        state.dmx_thread.join(timeout=2)
+        state.dmx_thread = None
+
+
+def set_channel(channel, value):
+    """Set a single DMX channel value"""
+    if 1 <= channel <= config.DMX_CHANNELS:
+        with state.dmx_lock:
+            state.dmx_data[int(channel)] = max(0, min(255, int(value)))
+
+
+def apply_scene(scene_name):
+    """Apply a scene to DMX channels"""
+    if scene_name not in config.SCENES:
+        print(f"ERROR: Scene {scene_name} not found")
+        return False
+
+    scene = config.SCENES[scene_name]
+
+    # Apply scene values atomically
+    with state.dmx_lock:
+        for channel, value in scene['channels'].items():
+            if 1 <= int(channel) <= config.DMX_CHANNELS:
+                state.dmx_data[int(channel)] = max(0, min(255, int(value)))
+
+    state.current_scene = scene_name
+    print(f"Applied scene: {scene['name']}")
+
+    return True
+
+
+def get_current_channels():
+    """Get current DMX channel values"""
+    with state.dmx_lock:
+        return {
+            'fog': state.dmx_data[1],
+            'outer_red': state.dmx_data[3],
+            'outer_green': state.dmx_data[4],
+            'outer_blue': state.dmx_data[5],
+            'outer_amber': state.dmx_data[6],
+            'inner_red': state.dmx_data[7],
+            'inner_green': state.dmx_data[8],
+            'inner_blue': state.dmx_data[9],
+            'inner_amber': state.dmx_data[10],
+            'led_mix1': state.dmx_data[11],
+            'led_mix2': state.dmx_data[12],
+            'auto_color': state.dmx_data[13],
+            'strobe': state.dmx_data[14],
+            'dimmer': state.dmx_data[15],
+            'safety': state.dmx_data[16],
+        }
+
+# ============================================
+# GPIO Functions
+# ============================================
+
+def _normalize_gpiochip_id(chip_id):
+    if chip_id is None:
+        return None
+    if isinstance(chip_id, int):
+        return chip_id
+    chip_id = str(chip_id).strip()
+    if chip_id.isdigit():
+        return int(chip_id)
+    if chip_id.startswith("/dev/") or chip_id.startswith("gpiochip"):
+        return chip_id
+    return chip_id
+
+
+def _gpiochip_candidates():
+    if config.GPIO_CHIP is not None:
+        return [_normalize_gpiochip_id(config.GPIO_CHIP)]
+    candidates = []
+    for path in sorted(glob.glob("/dev/gpiochip*")):
+        candidates.append(path)
+    return candidates
+
+
+def _chip_id_to_path(chip_id):
+    """Normalize a chip identifier to a /dev/gpiochipN path string."""
+    if chip_id is None:
+        return "/dev/gpiochip0"
+    if isinstance(chip_id, int):
+        return f"/dev/gpiochip{chip_id}"
+    chip_id = str(chip_id)
+    if chip_id.isdigit():
+        return f"/dev/gpiochip{chip_id}"
+    if chip_id.startswith("gpiochip"):
+        return f"/dev/{chip_id}"
+    return chip_id  # Already a full path
+
+
+def _open_gpiod_line(chip_id):
+    chip_id = _normalize_gpiochip_id(chip_id)
+
+    # gpiod v2 API: request_lines takes a path string, not a Chip object
+    if hasattr(gpiod, "request_lines") and hasattr(gpiod, "LineSettings"):
+        chip_path = _chip_id_to_path(chip_id)
+        direction_enum = getattr(gpiod, "LineDirection", None)
+        bias_enum = getattr(gpiod, "LineBias", None)
+        if direction_enum is None and hasattr(gpiod, "line"):
+            direction_enum = gpiod.line.Direction
+            bias_enum = gpiod.line.Bias
+        line_settings = gpiod.LineSettings(
+            direction=direction_enum.INPUT,
+            bias=bias_enum.PULL_UP,
+        )
+        request = gpiod.request_lines(
+            chip_path,
+            consumer="dmx_controller",
+            config={
+                config.CONTACT_PIN: line_settings,
+                config.SAFETY_SWITCH_PIN: line_settings,
+            },
+        )
+        return None, request  # v2: no separate Chip object needed
+
+    # gpiod v1 API: create Chip then request the line
+    chip = gpiod.Chip(chip_id) if chip_id is not None else None
+    try:
+        contact_line = chip.get_line(config.CONTACT_PIN)
+        contact_line.request(
+            consumer="dmx_controller",
+            type=gpiod.LINE_REQ_DIR_IN,
+            flags=gpiod.LINE_REQ_FLAG_BIAS_PULL_UP,
+        )
+        safety_line = chip.get_line(config.SAFETY_SWITCH_PIN)
+        safety_line.request(
+            consumer="dmx_controller",
+            type=gpiod.LINE_REQ_DIR_IN,
+            flags=gpiod.LINE_REQ_FLAG_BIAS_PULL_UP,
+        )
+        return chip, (contact_line, safety_line)
+    except Exception:
+        if chip is not None:
+            try:
+                chip.close()
+            except Exception:
+                pass
+        raise
+
+
+def _open_lgpio_line(chip_id):
+    chip_id = _normalize_gpiochip_id(chip_id)
+    if isinstance(chip_id, str):
+        digits = "".join(ch for ch in chip_id if ch.isdigit())
+        chip_id = int(digits) if digits else None
+    chip_id = 0 if chip_id is None else chip_id
+    chip = lgpio.gpiochip_open(chip_id)
+    try:
+        lgpio.gpio_claim_input(chip, config.CONTACT_PIN, lgpio.SET_PULL_UP)
+        lgpio.gpio_claim_input(chip, config.SAFETY_SWITCH_PIN, lgpio.SET_PULL_UP)
+        return chip
+    except Exception:
+        try:
+            lgpio.gpiochip_close(chip)
+        except Exception:
+            pass
+        raise
+
+
+def init_gpio():
+    """Initialize GPIO for contact closure detection.
+
+    Tries the preferred library first (gpiod), then falls back to the other
+    (lgpio) if all chips fail.  This is important for Pi 4 where gpiod may
+    have version/compatibility issues while lgpio works fine.
+    """
+    global GPIO_LIB
+
+    if not GPIO_AVAILABLE:
+        print("GPIO not available (not running on Raspberry Pi)")
+        return False
+
+    if state.gpio_line is not None or state.gpio_chip is not None:
+        try:
+            if GPIO_LIB == 'gpiod' and state.gpio_line is not None:
+                state.gpio_line.release()
+            if GPIO_LIB == 'gpiod' and state.gpio_safety_line is not None:
+                state.gpio_safety_line.release()
+            if GPIO_LIB == 'gpiod' and state.gpio_chip is not None:
+                state.gpio_chip.close()
+            if GPIO_LIB == 'lgpio' and state.gpio_chip is not None:
+                lgpio.gpiochip_close(state.gpio_chip)
+        except Exception as e:
+            print(f"WARNING: GPIO cleanup before init failed: {e}")
+        state.gpio_line = None
+        state.gpio_safety_line = None
+        state.gpio_chip = None
+        state.gpio_chip_id = None
+
+    # Build ordered list of libraries to attempt.
+    # Preferred library first, then fallback.
+    libs_to_try = []
+    if GPIO_LIB == 'gpiod':
+        libs_to_try.append('gpiod')
+        if lgpio is not None:
+            libs_to_try.append('lgpio')
+    elif GPIO_LIB == 'lgpio':
+        libs_to_try.append('lgpio')
+        if gpiod is not None:
+            libs_to_try.append('gpiod')
+    else:
+        if gpiod is not None:
+            libs_to_try.append('gpiod')
+        if lgpio is not None:
+            libs_to_try.append('lgpio')
+
+    for lib in libs_to_try:
+        try:
+            if lib == 'gpiod':
+                for chip_id in _gpiochip_candidates():
+                    try:
+                        state.gpio_chip, opened_line = _open_gpiod_line(chip_id)
+                        if isinstance(opened_line, tuple):
+                            state.gpio_line, state.gpio_safety_line = opened_line
+                        else:
+                            state.gpio_line = opened_line
+                            state.gpio_safety_line = None
+                        state.gpio_ready = True
+                        state.gpio_chip_id = chip_id
+                        GPIO_LIB = 'gpiod'
+                        print(f"GPIO initialized (gpiod) - {chip_id} pin {config.CONTACT_PIN} with pull-up")
+                        return True
+                    except Exception as e:
+                        print(f"GPIO init failed on {chip_id} (gpiod): {e}")
+
+            elif lib == 'lgpio':
+                for chip_id in _gpiochip_candidates():
+                    try:
+                        state.gpio_chip = _open_lgpio_line(chip_id)
+                        state.gpio_ready = True
+                        state.gpio_chip_id = chip_id
+                        GPIO_LIB = 'lgpio'
+                        print(f"GPIO initialized (lgpio) - {chip_id} pin {config.CONTACT_PIN} with pull-up")
+                        return True
+                    except Exception as e:
+                        print(f"GPIO init failed on {chip_id} (lgpio): {e}")
+
+        except Exception as e:
+            print(f"GPIO initialization failed ({lib}): {e}")
+
+    state.gpio_ready = False
+    print("GPIO: all libraries and chips exhausted — GPIO trigger unavailable")
+    return False
+
+
+def _gpio_value_to_int(val):
+    """Normalize a GPIO read value to int 0 or 1.
+
+    gpiod v2 returns a Value enum (not IntEnum) so direct == comparisons
+    against 0/1 would silently fail.  This helper handles both v1 (int)
+    and v2 (enum) return types.
+    """
+    if hasattr(val, 'value'):
+        return int(val.value)  # enum -> underlying int
+    return int(val)
+
+
+def _read_gpio_pin(pin):
+    if GPIO_LIB == 'gpiod':
+        try:
+            return _gpio_value_to_int(state.gpio_line.get_value(pin))
+        except TypeError:
+            line = state.gpio_line if pin == config.CONTACT_PIN else state.gpio_safety_line
+            if line is None:
+                return None
+            return _gpio_value_to_int(line.get_value())
+    if GPIO_LIB == 'lgpio':
+        return lgpio.gpio_read(state.gpio_chip, pin)
+    return None
+
+
+def check_contact_state():
+    """Check current contact closure state. Returns 0 (closed) or 1 (open), or None."""
+    if not GPIO_AVAILABLE or not state.gpio_ready:
+        return None
+
+    try:
+        return _read_gpio_pin(config.CONTACT_PIN)
+    except Exception as e:
+        print(f"WARNING: GPIO read error: {e}")
+        return None
+
+
+def check_safety_switch_state():
+    """Check safety toggle switch state. 0=ON/safe, 1=OFF/unsafe."""
+    if not GPIO_AVAILABLE or not state.gpio_ready:
+        return None
+
+    try:
+        return _read_gpio_pin(config.SAFETY_SWITCH_PIN)
+    except Exception as e:
+        print(f"WARNING: Safety GPIO read error: {e}")
+        return None
+
+
+def is_safe_to_operate():
+    """True when safety switch allows machine operation."""
+    safety_state = check_safety_switch_state()
+    return safety_state == 0
+
+
+def trigger_sequence():
+    """Execute the lighting sequence (thread-safe)"""
+    if not is_safe_to_operate():
+        print("Trigger ignored: safety switch is OFF/unsafe")
+        return False
+
+    print("\nTRIGGER DETECTED!")
+
+    with state.timer_lock:
+        # Cancel any existing timer
+        if state.scene_b_timer is not None:
+            state.scene_b_timer.cancel()
+
+        # Apply Scene B (Light ON)
+        apply_scene('scene_b')
+
+        # Set timer to return to Scene A (Light OFF)
+        def _return_to_scene_a():
+            with state.timer_lock:
+                apply_scene('scene_a')
+                state.scene_b_timer = None
+
+        state.scene_b_timer = Timer(config.SCENE_B_DURATION, _return_to_scene_a)
+        state.scene_b_timer.daemon = True
+        state.scene_b_timer.start()
+
+    print(f"Timer set: Scene A (OFF) in {config.SCENE_B_DURATION} seconds")
+    return True
+
+# ============================================
+# Flask Routes
+# ============================================
+
+
+
+def _validate_channel(channel):
+    return 1 <= channel <= config.DMX_CHANNELS
+
+
+def _sanitize_channel_value(channel, value):
+    if channel == 16:
+        if not (50 <= value <= 200):
+            raise ValueError("Safety channel must be between 50 and 200")
+    return max(0, min(255, int(value)))
+
+
+def _normalize_scene_channels(raw_channels, base_channels=None):
+    """Validate scene channel map and merge onto a known-safe base.
+
+    Returns a complete channel map when a base is supplied, preserving any
+    unspecified channels instead of dropping them.
+    """
+    if not isinstance(raw_channels, dict):
+        raise ValueError("Scene channel data must be an object")
+
+    channels = dict(base_channels) if isinstance(base_channels, dict) else {}
+    for raw_channel, raw_value in raw_channels.items():
+        channel = int(raw_channel)
+        if not _validate_channel(channel):
+            raise ValueError(f"Channel out of range: {channel}")
+        channels[channel] = _sanitize_channel_value(channel, int(raw_value))
+
+    # Never permit an invalid safety value in normalized scenes.
+    channels[16] = _sanitize_channel_value(16, int(channels.get(16, 100)))
+    return channels
+
+
+@app.route('/')
+def index():
+    """Main web interface - serve index.html directly"""
+    return send_file(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'index.html'))
+
+
+@app.route('/api/status')
+def api_status():
+    """Get current system status"""
+    contact_state = check_contact_state()
+    safety_switch_state = check_safety_switch_state()
+
+    return jsonify({
+        'enttec_connected': state.ftdi_device is not None,
+        'enttec_url': state.enttec_url,
+        'enttec_last_error': state.enttec_last_error,
+        'dmx_running': state.dmx_running and (state.dmx_thread is not None and state.dmx_thread.is_alive()),
+        'current_scene': state.current_scene,
+        'contact_state': 'closed' if contact_state == 0 else 'open' if contact_state == 1 else 'unknown',
+        'safety_switch_state': 'on' if safety_switch_state == 0 else 'off' if safety_switch_state == 1 else 'unknown',
+        'safe_to_operate': is_safe_to_operate(),
+        'gpio_available': GPIO_AVAILABLE,
+        'gpio_ready': state.gpio_ready,
+        'scene_b_duration': config.SCENE_B_DURATION,
+        'channels': get_current_channels(),
+    })
+
+
+@app.route('/api/trigger', methods=['POST'])
+def api_trigger():
+    """Manually trigger the sequence"""
+    if trigger_sequence():
+        return jsonify({'success': True})
+    return jsonify({'success': False, 'error': 'Safety switch is OFF - operation blocked'}), 409
+
+
+@app.route('/api/scene/<scene_name>', methods=['POST'])
+def api_apply_scene(scene_name):
+    """Apply a specific scene"""
+    if scene_name != 'scene_a' and not is_safe_to_operate():
+        return jsonify({'error': 'Safety switch is OFF - operation blocked'}), 409
+    with state.timer_lock:
+        if state.scene_b_timer is not None:
+            state.scene_b_timer.cancel()
+            state.scene_b_timer = None
+
+    if apply_scene(scene_name):
+        return jsonify({'success': True, 'scene': scene_name})
+    else:
+        return jsonify({'error': 'Scene not found'}), 404
+
+
+@app.route('/api/scenes', methods=['GET'])
+def api_list_scenes():
+    """List all available scenes"""
+    scenes = {}
+    for key, scene in config.SCENES.items():
+        scenes[key] = {
+            'name': scene['name'],
+            'channels': scene['channels']
+        }
+    return jsonify(scenes)
+
+
+@app.route('/api/channel', methods=['POST'])
+def api_set_channel():
+    """Set individual channel value"""
+    data = request.get_json()
+    if not data or 'channel' not in data or 'value' not in data:
+        return jsonify({'error': 'Missing channel or value'}), 400
+
+    try:
+        channel = int(data['channel'])
+        value = int(data['value'])
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Invalid channel or value'}), 400
+
+    if not _validate_channel(channel):
+        return jsonify({'error': 'Channel out of range'}), 400
+
+    try:
+        safe_value = _sanitize_channel_value(channel, value)
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+
+    set_channel(channel, safe_value)
+    return jsonify({'success': True, 'channel': channel, 'value': safe_value})
+
+
+@app.route('/api/blackout', methods=['POST'])
+def api_blackout():
+    """Emergency blackout - all channels to zero"""
+    with state.timer_lock:
+        if state.scene_b_timer is not None:
+            state.scene_b_timer.cancel()
+            state.scene_b_timer = None
+    with state.dmx_lock:
+        for i in range(1, config.DMX_CHANNELS + 1):
+            state.dmx_data[i] = 0
+        # Keep safety channel valid so fixture stays responsive to future commands
+        state.dmx_data[16] = 100
+    state.current_scene = None
+    print("BLACKOUT - All channels zeroed (safety channel kept valid)")
+    return jsonify({'success': True})
+
+
+@app.route('/api/config', methods=['GET', 'POST'])
+def api_config():
+    """Get or update configuration"""
+    if request.method == 'POST':
+        data = request.get_json(silent=True)
+        if not isinstance(data, dict):
+            return jsonify({'error': 'Invalid or missing JSON body'}), 400
+
+        # Update any scene
+        for scene_key in ['scene_a', 'scene_b', 'scene_c', 'scene_d']:
+            if scene_key in data:
+                try:
+                    raw = data[scene_key]
+                    channels = _normalize_scene_channels(
+                        raw,
+                        base_channels=config.SCENES[scene_key]['channels'],
+                    )
+                except (TypeError, ValueError) as e:
+                    return jsonify({'error': f'Invalid channel data in {scene_key}: {e}'}), 400
+                config.SCENES[scene_key]['channels'] = channels
+                print(f"Updated {scene_key}: {config.SCENES[scene_key]['channels']}")
+                # Re-apply if it's the current scene
+                if state.current_scene == scene_key:
+                    apply_scene(scene_key)
+
+        # Update duration (clamp to safe range)
+        if 'scene_b_duration' in data:
+            try:
+                dur = float(data['scene_b_duration'])
+                if dur != dur:  # NaN check
+                    return jsonify({'error': 'Invalid duration value'}), 400
+                dur = max(0.5, min(300.0, dur))
+                config.SCENE_B_DURATION = dur
+                print(f"Updated Scene B duration: {config.SCENE_B_DURATION}s")
+            except (TypeError, ValueError):
+                return jsonify({'error': 'Invalid duration value'}), 400
+
+        # Persist to disk
+        save_config()
+
+        return jsonify({'success': True})
+    else:
+        return jsonify({
+            'scene_a': config.SCENES['scene_a']['channels'],
+            'scene_b': config.SCENES['scene_b']['channels'],
+            'scene_c': config.SCENES['scene_c']['channels'],
+            'scene_d': config.SCENES['scene_d']['channels'],
+            'scene_b_duration': config.SCENE_B_DURATION,
+            'contact_pin': config.CONTACT_PIN,
+            'safety_switch_pin': config.SAFETY_SWITCH_PIN,
+        })
+
+# ============================================
+# Health Check
+# ============================================
+
+@app.route('/api/health')
+def api_health():
+    """Health check endpoint for monitoring and install verification."""
+    healthy = state.dmx_running and state.dmx_thread is not None and state.dmx_thread.is_alive()
+    status_code = 200 if healthy else 503
+    return jsonify({
+        'status': 'ok' if healthy else 'degraded',
+        'enttec_connected': state.ftdi_device is not None,
+        'enttec_url': state.enttec_url,
+        'enttec_last_error': state.enttec_last_error,
+        'dmx_running': healthy,
+        'gpio_available': GPIO_AVAILABLE,
+        'gpio_ready': state.gpio_ready,
+        'safe_to_operate': is_safe_to_operate(),
+    }), status_code
+
+# ============================================
+# Initialization & Shutdown
+# ============================================
+
+_initialized = False
+
+
+def _gpio_monitor():
+    """Background thread: polls GPIO for contact closure events with debounce."""
+    last_state = None
+    last_safety_state = None
+    last_trigger_time = 0.0
+    consecutive_errors = 0
+    max_errors_before_reinit = 3
+
+    while True:
+        try:
+            if not state.gpio_ready:
+                if init_gpio():
+                    print("GPIO initialized from monitor thread")
+                    last_state = None
+                else:
+                    time.sleep(5.0)
+                    continue
+
+            current_state = check_contact_state()
+            safety_state = check_safety_switch_state()
+            if safety_state is not None:
+                if last_safety_state == 0 and safety_state == 1:
+                    print("Safety switch turned OFF - forcing Scene A")
+                    with state.timer_lock:
+                        if state.scene_b_timer is not None:
+                            state.scene_b_timer.cancel()
+                            state.scene_b_timer = None
+                    apply_scene('scene_a')
+                last_safety_state = safety_state
+
+            if current_state is not None:
+                now = time.monotonic()
+                if (last_state == 1 and current_state == 0
+                        and (now - last_trigger_time) >= config.DEBOUNCE_TIME):
+                    last_trigger_time = now
+                    trigger_sequence()
+                last_state = current_state
+                consecutive_errors = 0
+            time.sleep(0.05)
+        except Exception as e:
+            consecutive_errors += 1
+            print(f"WARNING: GPIO monitor error ({consecutive_errors}/{max_errors_before_reinit}): {e}")
+            if consecutive_errors >= max_errors_before_reinit:
+                print("Attempting GPIO re-initialization...")
+                state.gpio_ready = False
+                last_state = None
+                consecutive_errors = 0
+            time.sleep(1.0)
+
+
+def _cleanup():
+    """Release hardware resources on shutdown."""
+    global _initialized
+    if not _initialized:
+        return
+    _initialized = False
+
+    print("Shutting down DMX controller...")
+    stop_dmx_refresh()
+
+    with state.timer_lock:
+        if state.scene_b_timer:
+            state.scene_b_timer.cancel()
+
+    if state.ftdi_device:
+        try:
+            state.ftdi_device.close()
+        except Exception:
+            pass
+    state.ftdi_device = None
+    state.enttec_url = None
+
+    if GPIO_AVAILABLE:
+        try:
+            if GPIO_LIB == 'gpiod' and state.gpio_line is not None:
+                state.gpio_line.release()
+            if GPIO_LIB == 'gpiod' and state.gpio_safety_line is not None:
+                state.gpio_safety_line.release()
+            if GPIO_LIB == 'gpiod' and state.gpio_chip is not None:
+                state.gpio_chip.close()
+            if GPIO_LIB == 'lgpio' and state.gpio_chip is not None:
+                lgpio.gpiochip_close(state.gpio_chip)
+        except Exception as e:
+            print(f"WARNING: GPIO cleanup failed: {e}")
+
+    print("Shutdown complete")
+
+
+def _initialize():
+    """Initialize all hardware and start background threads.
+
+    Safe to call multiple times — only the first call takes effect.
+    Called automatically at module load so that gunicorn workers
+    (which import this module but never call main()) are fully
+    initialized.
+    """
+    global _initialized
+    if _initialized:
+        return
+    _initialized = True
+
+    print("=" * 60)
+    print("DMX CONTROLLER - DJPOWER H-IP20V Fog Machine")
+    print("=" * 60)
+    print()
+
+    load_config()
+
+    if not init_enttec():
+        print("WARNING: ENTTEC not available at startup. Will keep retrying in the background.")
+
+    start_dmx_refresh()
+    time.sleep(0.5)
+
+    init_gpio()
+    apply_scene('scene_a')
+
+    if GPIO_AVAILABLE:
+        Thread(target=_gpio_monitor, daemon=True).start()
+
+    # Register cleanup for graceful shutdown
+    atexit.register(_cleanup)
+
+    print()
+    print("=" * 60)
+    print("System ready!")
+    print("   Default: All OFF (Scene A)")
+    print(f"   On trigger: Fog ON for {config.SCENE_B_DURATION} seconds (Scene B)")
+    print("   Custom scenes: C & D available")
+    print()
+    print("   Web interface: http://0.0.0.0:5000")
+    if GPIO_AVAILABLE and state.gpio_ready:
+        print(f"   GPIO trigger pin {config.CONTACT_PIN} monitoring active")
+        print(f"   GPIO safety switch pin {config.SAFETY_SWITCH_PIN} monitoring active")
+    elif GPIO_AVAILABLE:
+        print("   GPIO available but init failed - monitor will retry automatically")
+    print("=" * 60)
+    print()
+
+
+def _on_sigterm(_signum, _frame):
+    """Convert SIGTERM to a clean exit so atexit handlers run."""
+    sys.exit(0)
+
+
+# --- Module-level initialization ---
+# This runs when gunicorn imports the module (app:app) OR when run directly.
+signal.signal(signal.SIGTERM, _on_sigterm)
+_initialize()
+
+
+def main():
+    """Entry point for direct execution (python app.py)."""
+    try:
+        app.run(host='0.0.0.0', port=5000, debug=False)
+    except KeyboardInterrupt:
+        print("\nKeyboard interrupt received")
+
+
+if __name__ == "__main__":
+    main()

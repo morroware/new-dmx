@@ -1,0 +1,5 @@
+flask>=2.0
+gunicorn>=21.2
+pyftdi>=0.54
+gpiod>=2.0,<3.0
+lgpio>=0.2

@@ -1,0 +1,931 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DMX Controller - DJPOWER H-IP20V Fog Machine</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+            background: #0a0a0f;
+            min-height: 100vh;
+            padding: 20px;
+            color: #e4e4e7;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        
+        .card {
+            background: linear-gradient(145deg, #16161d 0%, #1a1a24 100%);
+            border: 1px solid #2a2a3a;
+            border-radius: 12px;
+            padding: 25px;
+            margin-bottom: 20px;
+            box-shadow: 0 4px 24px rgba(0,0,0,0.4), 
+                        inset 0 1px 0 rgba(255,255,255,0.03);
+        }
+        
+        h1 {
+            color: #f4f4f5;
+            margin-bottom: 10px;
+            font-size: 28px;
+            font-weight: 600;
+            letter-spacing: -0.5px;
+        }
+        
+        h2 {
+            color: #a1a1aa;
+            margin-bottom: 15px;
+            font-size: 16px;
+            font-weight: 500;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        
+        .grid-2 {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+        }
+        
+        .status-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+            gap: 12px;
+            margin-bottom: 15px;
+        }
+        
+        .status-item {
+            background: #0f0f14;
+            border: 1px solid #2a2a3a;
+            padding: 14px;
+            border-radius: 8px;
+            text-align: center;
+        }
+        
+        .status-label {
+            font-size: 10px;
+            color: #71717a;
+            margin-bottom: 6px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            font-weight: 600;
+        }
+        
+        .status-value {
+            font-size: 18px;
+            font-weight: 700;
+            color: #e4e4e7;
+            font-family: 'SF Mono', 'Consolas', monospace;
+        }
+        
+        .status-value.online { 
+            color: #22c55e;
+            text-shadow: 0 0 12px rgba(34, 197, 94, 0.4);
+        }
+        .status-value.offline { 
+            color: #ef4444;
+            text-shadow: 0 0 12px rgba(239, 68, 68, 0.4);
+        }
+        
+        .button-group {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 12px;
+            margin-bottom: 15px;
+        }
+        
+        button {
+            padding: 14px 18px;
+            font-size: 13px;
+            font-weight: 600;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        
+        button:hover {
+            transform: translateY(-2px);
+        }
+        
+        button:active {
+            transform: translateY(0);
+        }
+        
+        .btn-primary { 
+            background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
+            color: white;
+            box-shadow: 0 4px 14px rgba(59, 130, 246, 0.35);
+        }
+        .btn-primary:hover { 
+            background: linear-gradient(135deg, #60a5fa 0%, #3b82f6 100%);
+            box-shadow: 0 6px 20px rgba(59, 130, 246, 0.45);
+        }
+        
+        .btn-success { 
+            background: linear-gradient(135deg, #22c55e 0%, #16a34a 100%);
+            color: white;
+            box-shadow: 0 4px 14px rgba(34, 197, 94, 0.35);
+        }
+        .btn-success:hover { 
+            background: linear-gradient(135deg, #4ade80 0%, #22c55e 100%);
+            box-shadow: 0 6px 20px rgba(34, 197, 94, 0.45);
+        }
+        
+        .btn-danger { 
+            background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+            color: white;
+            box-shadow: 0 4px 14px rgba(239, 68, 68, 0.35);
+        }
+        .btn-danger:hover { 
+            background: linear-gradient(135deg, #f87171 0%, #ef4444 100%);
+            box-shadow: 0 6px 20px rgba(239, 68, 68, 0.45);
+        }
+        
+        .btn-secondary { 
+            background: linear-gradient(135deg, #3f3f46 0%, #27272a 100%);
+            color: #e4e4e7;
+            border: 1px solid #52525b;
+        }
+        .btn-secondary:hover { 
+            background: linear-gradient(135deg, #52525b 0%, #3f3f46 100%);
+            border-color: #71717a;
+        }
+        
+        .form-group {
+            margin-bottom: 16px;
+        }
+        
+        label {
+            display: block;
+            font-weight: 500;
+            margin-bottom: 8px;
+            color: #a1a1aa;
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        
+        input[type="range"] {
+            width: 100%;
+            height: 6px;
+            border-radius: 3px;
+            background: #27272a;
+            outline: none;
+            -webkit-appearance: none;
+        }
+        
+        input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
+            cursor: pointer;
+            box-shadow: 0 2px 8px rgba(59, 130, 246, 0.5);
+            transition: all 0.2s;
+        }
+        
+        input[type="range"]::-webkit-slider-thumb:hover {
+            transform: scale(1.1);
+            box-shadow: 0 4px 12px rgba(59, 130, 246, 0.6);
+        }
+        
+        input[type="range"]::-moz-range-thumb {
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
+            cursor: pointer;
+            border: none;
+            box-shadow: 0 2px 8px rgba(59, 130, 246, 0.5);
+        }
+        
+        input[type="number"] {
+            width: 100%;
+            padding: 12px 14px;
+            border: 1px solid #3f3f46;
+            border-radius: 8px;
+            font-size: 14px;
+            background: #0f0f14;
+            color: #e4e4e7;
+            transition: all 0.2s;
+        }
+        
+        input[type="number"]:focus {
+            outline: none;
+            border-color: #3b82f6;
+            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.2);
+        }
+        
+        .value-display {
+            display: inline-block;
+            min-width: 45px;
+            text-align: right;
+            font-weight: 700;
+            color: #3b82f6;
+            font-family: 'SF Mono', 'Consolas', monospace;
+        }
+        
+        .info-text {
+            background: rgba(59, 130, 246, 0.1);
+            border-left: 3px solid #3b82f6;
+            padding: 14px 16px;
+            border-radius: 0 8px 8px 0;
+            margin-top: 15px;
+            color: #93c5fd;
+            font-size: 13px;
+        }
+        
+        .info-text strong {
+            color: #60a5fa;
+        }
+        
+        .subtitle {
+            color: #71717a;
+            font-size: 14px;
+            margin-top: 5px;
+        }
+        
+        select {
+            width: 100%;
+            padding: 12px 14px;
+            border: 1px solid #3f3f46;
+            border-radius: 8px;
+            font-size: 14px;
+            background: #0f0f14;
+            color: #e4e4e7;
+            cursor: pointer;
+            transition: all 0.2s;
+            -webkit-appearance: none;
+            -moz-appearance: none;
+            appearance: none;
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%2371717a' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
+            background-repeat: no-repeat;
+            background-position: right 14px center;
+            padding-right: 40px;
+        }
+        
+        select:focus {
+            outline: none;
+            border-color: #3b82f6;
+            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.2);
+        }
+        
+        select option {
+            background: #1a1a24;
+            color: #e4e4e7;
+            padding: 10px;
+        }
+        
+        /* Toast notification */
+        .toast {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            background: linear-gradient(135deg, #22c55e 0%, #16a34a 100%);
+            color: white;
+            padding: 16px 28px;
+            border-radius: 10px;
+            box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+            z-index: 1000;
+            animation: slideIn 0.3s ease;
+            font-weight: 600;
+            font-size: 14px;
+        }
+        
+        .toast.error {
+            background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+        }
+        
+        @keyframes slideIn {
+            from {
+                transform: translateX(400px);
+                opacity: 0;
+            }
+            to {
+                transform: translateX(0);
+                opacity: 1;
+            }
+        }
+        
+        @keyframes slideOut {
+            from {
+                transform: translateX(0);
+                opacity: 1;
+            }
+            to {
+                transform: translateX(400px);
+                opacity: 0;
+            }
+        }
+        
+        .tabs {
+            display: flex;
+            gap: 5px;
+            margin-bottom: 20px;
+            border-bottom: 1px solid #2a2a3a;
+            padding-bottom: 0;
+        }
+        
+        .tab {
+            padding: 12px 24px;
+            cursor: pointer;
+            border: none;
+            background: none;
+            color: #71717a;
+            font-weight: 600;
+            font-size: 13px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            border-bottom: 2px solid transparent;
+            margin-bottom: -1px;
+            transition: all 0.2s;
+        }
+        
+        .tab:hover {
+            color: #a1a1aa;
+            transform: none;
+            box-shadow: none;
+        }
+        
+        .tab.active {
+            color: #3b82f6;
+            border-bottom-color: #3b82f6;
+        }
+        
+        .tab-content {
+            display: none;
+        }
+        
+        .tab-content.active {
+            display: block;
+        }
+        
+        /* Accent glow effects */
+        .card:hover {
+            border-color: #3f3f46;
+        }
+        
+        /* Scrollbar styling */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+        
+        ::-webkit-scrollbar-track {
+            background: #0f0f14;
+        }
+        
+        ::-webkit-scrollbar-thumb {
+            background: #3f3f46;
+            border-radius: 4px;
+        }
+        
+        ::-webkit-scrollbar-thumb:hover {
+            background: #52525b;
+        }
+        
+        /* Header accent line */
+        .card:first-child {
+            border-top: 3px solid #3b82f6;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <div class="card">
+            <h1>🎭 DMX Controller - H-IP20V</h1>
+            <p class="subtitle">DJPOWER H-IP20V Fog Machine - 16 Channel Control</p>
+            
+            <div class="status-grid" style="margin-top: 15px;">
+                <div class="status-item">
+                    <div class="status-label">ENTTEC</div>
+                    <div class="status-value" id="enttec-status">—</div>
+                </div>
+                <div class="status-item">
+                    <div class="status-label">DMX</div>
+                    <div class="status-value" id="dmx-status">—</div>
+                </div>
+                <div class="status-item">
+                    <div class="status-label">Scene</div>
+                    <div class="status-value" id="current-scene">—</div>
+                </div>
+                <div class="status-item">
+                    <div class="status-label">Contact</div>
+                    <div class="status-value" id="contact-state">—</div>
+                </div>
+                <div class="status-item">
+                    <div class="status-label">Safety SW</div>
+                    <div class="status-value" id="safety-switch-state">—</div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="grid-2">
+            <!-- Quick Controls -->
+            <div class="card">
+                <h2>⚡ Quick Controls</h2>
+                
+                <div class="button-group">
+                    <button id="trigger-button" class="btn-success" onclick="trigger()">
+                        🔔 Trigger
+                    </button>
+                    <button class="btn-danger" onclick="applyScene('scene_a')">
+                        ⚫ ALL OFF (A)
+                    </button>
+                    <button class="btn-primary" onclick="applyScene('scene_b')">
+                        🌫 FOG ON (B)
+                    </button>
+                    <button class="btn-secondary" onclick="applyScene('scene_c')">
+                        🔵 Custom 1 (C)
+                    </button>
+                    <button class="btn-secondary" onclick="applyScene('scene_d')">
+                        🔴 Custom 2 (D)
+                    </button>
+                </div>
+                <button class="btn-danger" onclick="blackout()" style="width: 100%; margin-bottom: 15px;">
+                    🚨 EMERGENCY BLACKOUT
+                </button>
+                
+                <div class="form-group">
+                    <label for="trigger-duration">Trigger Duration (seconds)</label>
+                    <input type="number" id="trigger-duration" min="1" max="300" step="0.5" value="10.0">
+                </div>
+                <button class="btn-primary" onclick="updateDuration()" style="width: 100%;">
+                    Save Duration
+                </button>
+            </div>
+            
+            <!-- Live Controls -->
+            <div class="card">
+                <h2>🎚 Live Control</h2>
+
+                <div class="form-group">
+                    <label>Fog Output <span class="value-display" id="fog-value">0</span></label>
+                    <input type="range" id="fog" min="0" max="255" value="0" oninput="updateChannel(1, this.value)">
+                </div>
+
+                <div class="form-group">
+                    <label>Dimmer (LED) <span class="value-display" id="dimmer-value">0</span></label>
+                    <input type="range" id="dimmer" min="0" max="255" value="0" oninput="updateChannel(15, this.value)">
+                </div>
+
+                <div class="form-group">
+                    <label>Strobe <span class="value-display" id="strobe-value">0</span></label>
+                    <input type="range" id="strobe" min="0" max="255" value="0" oninput="updateChannel(14, this.value)">
+                </div>
+
+                <div class="form-group">
+                    <label>Safety Channel <span class="value-display" id="safety-value">100</span></label>
+                    <select id="safety" onchange="updateChannel(16, this.value)">
+                        <option value="50">Minimum (50)</option>
+                        <option value="100" selected>Default (100)</option>
+                        <option value="200">Maximum (200)</option>
+                    </select>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Advanced Controls -->
+        <div class="card">
+            <h2>🎨 LED Controls</h2>
+
+            <div class="tabs">
+                <button class="tab active" onclick="showTab('outer-leds', this)">Outer LEDs</button>
+                <button class="tab" onclick="showTab('inner-leds', this)">Inner LEDs</button>
+                <button class="tab" onclick="showTab('led-effects', this)">LED Effects</button>
+            </div>
+
+            <!-- Outer LEDs Tab -->
+            <div id="outer-leds" class="tab-content active">
+                <div class="grid-2">
+                    <div class="form-group">
+                        <label>Outer Red <span class="value-display" id="outer-red-value">0</span></label>
+                        <input type="range" id="outer-red" min="0" max="255" value="0" oninput="updateChannel(3, this.value)">
+                    </div>
+
+                    <div class="form-group">
+                        <label>Outer Green <span class="value-display" id="outer-green-value">0</span></label>
+                        <input type="range" id="outer-green" min="0" max="255" value="0" oninput="updateChannel(4, this.value)">
+                    </div>
+
+                    <div class="form-group">
+                        <label>Outer Blue <span class="value-display" id="outer-blue-value">0</span></label>
+                        <input type="range" id="outer-blue" min="0" max="255" value="0" oninput="updateChannel(5, this.value)">
+                    </div>
+
+                    <div class="form-group">
+                        <label>Outer Amber <span class="value-display" id="outer-amber-value">0</span></label>
+                        <input type="range" id="outer-amber" min="0" max="255" value="0" oninput="updateChannel(6, this.value)">
+                    </div>
+                </div>
+            </div>
+
+            <!-- Inner LEDs Tab -->
+            <div id="inner-leds" class="tab-content">
+                <div class="grid-2">
+                    <div class="form-group">
+                        <label>Inner Red <span class="value-display" id="inner-red-value">0</span></label>
+                        <input type="range" id="inner-red" min="0" max="255" value="0" oninput="updateChannel(7, this.value)">
+                    </div>
+
+                    <div class="form-group">
+                        <label>Inner Green <span class="value-display" id="inner-green-value">0</span></label>
+                        <input type="range" id="inner-green" min="0" max="255" value="0" oninput="updateChannel(8, this.value)">
+                    </div>
+
+                    <div class="form-group">
+                        <label>Inner Blue <span class="value-display" id="inner-blue-value">0</span></label>
+                        <input type="range" id="inner-blue" min="0" max="255" value="0" oninput="updateChannel(9, this.value)">
+                    </div>
+
+                    <div class="form-group">
+                        <label>Inner Amber <span class="value-display" id="inner-amber-value">0</span></label>
+                        <input type="range" id="inner-amber" min="0" max="255" value="0" oninput="updateChannel(10, this.value)">
+                    </div>
+                </div>
+            </div>
+
+            <!-- LED Effects Tab -->
+            <div id="led-effects" class="tab-content">
+                <div class="grid-2">
+                    <div class="form-group">
+                        <label>LED Mix Color 1 <span class="value-display" id="led-mix1-value">0</span></label>
+                        <input type="range" id="led-mix1" min="0" max="255" value="0" oninput="updateChannel(11, this.value)">
+                    </div>
+
+                    <div class="form-group">
+                        <label>LED Mix Color 2 <span class="value-display" id="led-mix2-value">0</span></label>
+                        <input type="range" id="led-mix2" min="0" max="255" value="0" oninput="updateChannel(12, this.value)">
+                    </div>
+
+                    <div class="form-group">
+                        <label>LED Auto Color <span class="value-display" id="auto-color-value">0</span></label>
+                        <input type="range" id="auto-color" min="0" max="255" value="0" oninput="updateChannel(13, this.value)">
+                    </div>
+                </div>
+
+                <div class="info-text">
+                    <strong>Note:</strong> LED lighting time will automatically turn off after 25 seconds. To re-light, set Dimmer to 0 then back to 255.
+                </div>
+            </div>
+        </div>
+        
+        <!-- Scene Editor -->
+        <div class="card">
+            <h2>💾 Scene Editor</h2>
+            
+            <div class="form-group">
+                <label>Edit Scene</label>
+                <select id="scene-select">
+                    <option value="scene_a">Scene A (OFF)</option>
+                    <option value="scene_b">Scene B (ON)</option>
+                    <option value="scene_c">Scene C (Custom 1)</option>
+                    <option value="scene_d">Scene D (Custom 2)</option>
+                </select>
+            </div>
+            
+            <button class="btn-primary" onclick="saveCurrentAsScene()">
+                💾 Save Current Settings to Scene
+            </button>
+            
+            <div class="info-text">
+                <strong>Tip:</strong> Adjust the controls above to your desired settings, then save them to a scene for quick recall.
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        // Update status every 2 seconds
+        const statusInterval = setInterval(updateStatus, 2000);
+        updateStatus();
+        
+        let currentChannels = {};
+        let activeSlider = null;  // Track slider being dragged to prevent polling overwrite
+        let lastChannelError = 0;
+        let lastStatusError = 0;
+        let statusErrorCount = 0;
+        function getApiHeaders() {
+            return {'Content-Type': 'application/json'};
+        }
+
+        // Toast notification function
+        function showToast(message, isError = false) {
+            const toast = document.createElement('div');
+            toast.className = 'toast' + (isError ? ' error' : '');
+            toast.textContent = message;
+            document.body.appendChild(toast);
+            
+            setTimeout(() => {
+                toast.style.animation = 'slideOut 0.3s ease';
+                setTimeout(() => toast.remove(), 300);
+            }, 2000);
+        }
+        
+        function updateStatus() {
+            fetch('/api/status', {headers: getApiHeaders()})
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error('Status request failed');
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    statusErrorCount = 0;
+                    document.getElementById('enttec-status').textContent = data.enttec_connected ? 'OK' : 'ERR';
+                    document.getElementById('enttec-status').className = 'status-value ' + (data.enttec_connected ? 'online' : 'offline');
+                    
+                    document.getElementById('dmx-status').textContent = data.dmx_running ? 'ON' : 'OFF';
+                    document.getElementById('dmx-status').className = 'status-value ' + (data.dmx_running ? 'online' : 'offline');
+                    
+                    const sceneName = {'scene_a': 'A', 'scene_b': 'B', 'scene_c': 'C', 'scene_d': 'D'}[data.current_scene] || '—';
+                    document.getElementById('current-scene').textContent = sceneName;
+                    
+                    const contactText = {'open': 'OPEN', 'closed': 'CLOSED'}[data.contact_state] || '—';
+                    document.getElementById('contact-state').textContent = contactText;
+
+                    const safetyText = {'on': 'SAFE', 'off': 'LOCK'}[data.safety_switch_state] || '—';
+                    const safetyEl = document.getElementById('safety-switch-state');
+                    safetyEl.textContent = safetyText;
+                    safetyEl.className = 'status-value ' + (data.safe_to_operate ? 'online' : 'offline');
+
+                    const triggerBtn = document.getElementById('trigger-button');
+                    triggerBtn.disabled = !data.safe_to_operate;
+                    triggerBtn.style.opacity = data.safe_to_operate ? '1' : '0.5';
+                    triggerBtn.title = data.safe_to_operate ? '' : 'Safety switch is OFF';
+                    
+                    // Update current channels
+                    if (data.channels) {
+                        currentChannels = data.channels;
+                        updateSliderDisplays();
+                    }
+                    
+                    // Update trigger duration display
+                    if (data.scene_b_duration) {
+                        document.getElementById('trigger-duration').value = data.scene_b_duration;
+                    }
+                })
+                .catch(error => {
+                    console.error('Status poll error:', error);
+                    statusErrorCount++;
+                    const now = Date.now();
+                    // Only show toast once every 10 seconds to avoid spam
+                    if (now - lastStatusError > 10000) {
+                        showToast('Connection lost - retrying...', true);
+                        lastStatusError = now;
+                    }
+                });
+        }
+        
+        function updateSliderDisplays() {
+            const sliderMap = {
+                'fog': ['fog-value', 'fog'],
+                'dimmer': ['dimmer-value', 'dimmer'],
+                'strobe': ['strobe-value', 'strobe'],
+                'outer_red': ['outer-red-value', 'outer-red'],
+                'outer_green': ['outer-green-value', 'outer-green'],
+                'outer_blue': ['outer-blue-value', 'outer-blue'],
+                'outer_amber': ['outer-amber-value', 'outer-amber'],
+                'inner_red': ['inner-red-value', 'inner-red'],
+                'inner_green': ['inner-green-value', 'inner-green'],
+                'inner_blue': ['inner-blue-value', 'inner-blue'],
+                'inner_amber': ['inner-amber-value', 'inner-amber'],
+                'led_mix1': ['led-mix1-value', 'led-mix1'],
+                'led_mix2': ['led-mix2-value', 'led-mix2'],
+                'auto_color': ['auto-color-value', 'auto-color'],
+            };
+            for (const [key, [valueId, sliderId]] of Object.entries(sliderMap)) {
+                if (currentChannels[key] !== undefined) {
+                    // Don't overwrite a slider the user is actively dragging
+                    if (sliderId === activeSlider) continue;
+                    document.getElementById(valueId).textContent = currentChannels[key];
+                    document.getElementById(sliderId).value = currentChannels[key];
+                }
+            }
+            if (currentChannels.safety !== undefined) {
+                document.getElementById('safety-value').textContent = currentChannels.safety;
+                // Sync the select element to the closest matching option
+                const safetySelect = document.getElementById('safety');
+                const safetyVal = currentChannels.safety;
+                const options = Array.from(safetySelect.options).map(o => parseInt(o.value));
+                let closest = options[0];
+                for (const opt of options) {
+                    if (Math.abs(opt - safetyVal) < Math.abs(closest - safetyVal)) {
+                        closest = opt;
+                    }
+                }
+                safetySelect.value = closest;
+            }
+        }
+        
+        function updateChannel(channel, value) {
+            // Update display
+            const displays = {
+                1: 'fog-value',
+                3: 'outer-red-value',
+                4: 'outer-green-value',
+                5: 'outer-blue-value',
+                6: 'outer-amber-value',
+                7: 'inner-red-value',
+                8: 'inner-green-value',
+                9: 'inner-blue-value',
+                10: 'inner-amber-value',
+                11: 'led-mix1-value',
+                12: 'led-mix2-value',
+                13: 'auto-color-value',
+                14: 'strobe-value',
+                15: 'dimmer-value',
+                16: 'safety-value',
+            };
+            
+            if (displays[channel]) {
+                document.getElementById(displays[channel]).textContent = value;
+            }
+            
+            // Send to server
+            fetch('/api/channel', {
+                method: 'POST',
+                headers: getApiHeaders(),
+                body: JSON.stringify({channel: channel, value: value})
+            })
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error('Channel update failed');
+                }
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                const now = Date.now();
+                if (now - lastChannelError > 2000) {
+                    showToast('❌ Error updating channel', true);
+                    lastChannelError = now;
+                }
+            });
+        }
+        
+        function trigger() {
+            fetch('/api/trigger', {method: 'POST', headers: getApiHeaders()})
+                .then(response => response.json().then(data => ({ok: response.ok, data})))
+                .then(({ok, data}) => {
+                    if (!ok) {
+                        throw new Error(data.error || 'Trigger failed');
+                    }
+                    if (data.success) {
+                        showToast('✅ Trigger activated!');
+                        updateStatus();
+                    }
+                })
+                .catch(error => {
+                    console.error('Error:', error);
+                    showToast(`❌ ${error.message || 'Error triggering'}`, true);
+                });
+        }
+        
+        const sceneNames = {
+            'scene_a': 'All OFF (A)',
+            'scene_b': 'Fog ON (B)',
+            'scene_c': 'Custom 1 (C)',
+            'scene_d': 'Custom 2 (D)',
+        };
+
+        function applyScene(sceneName) {
+            fetch(`/api/scene/${sceneName}`, {method: 'POST', headers: getApiHeaders()})
+                .then(response => response.json().then(data => ({ok: response.ok, data})))
+                .then(({ok, data}) => {
+                    if (!ok) {
+                        throw new Error(data.error || 'Scene apply failed');
+                    }
+                    if (data.success) {
+                        showToast('Scene: ' + (sceneNames[sceneName] || sceneName));
+                        updateStatus();
+                    }
+                })
+                .catch(error => {
+                    console.error('Error:', error);
+                    showToast(`❌ ${error.message || 'Error applying scene'}`, true);
+                });
+        }
+
+        function blackout() {
+            fetch('/api/blackout', {method: 'POST', headers: getApiHeaders()})
+                .then(response => response.json().then(data => ({ok: response.ok, data})))
+                .then(({ok, data}) => {
+                    if (!ok) {
+                        throw new Error('Blackout failed');
+                    }
+                    if (data.success) {
+                        showToast('🚨 BLACKOUT - All channels zeroed');
+                        updateStatus();
+                    }
+                })
+                .catch(error => {
+                    console.error('Error:', error);
+                    showToast('❌ Error during blackout', true);
+                });
+        }
+        
+        function updateDuration() {
+            const duration = parseFloat(document.getElementById('trigger-duration').value);
+            
+            fetch('/api/config', {
+                method: 'POST',
+                headers: getApiHeaders(),
+                body: JSON.stringify({scene_b_duration: duration})
+            })
+            .then(response => response.json().then(data => ({ok: response.ok, data})))
+            .then(({ok, data}) => {
+                if (ok && data.success) {
+                    showToast(`✅ Duration: ${duration}s`);
+                } else {
+                    throw new Error('Duration update failed');
+                }
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                showToast('❌ Error updating config', true);
+            });
+        }
+        
+        function saveCurrentAsScene() {
+            const sceneKey = document.getElementById('scene-select').value;
+            
+            // Get current channel values
+            const channels = {
+                1: parseInt(document.getElementById('fog').value),
+                2: 0,  // Disabled channel
+                3: parseInt(document.getElementById('outer-red').value),
+                4: parseInt(document.getElementById('outer-green').value),
+                5: parseInt(document.getElementById('outer-blue').value),
+                6: parseInt(document.getElementById('outer-amber').value),
+                7: parseInt(document.getElementById('inner-red').value),
+                8: parseInt(document.getElementById('inner-green').value),
+                9: parseInt(document.getElementById('inner-blue').value),
+                10: parseInt(document.getElementById('inner-amber').value),
+                11: parseInt(document.getElementById('led-mix1').value),
+                12: parseInt(document.getElementById('led-mix2').value),
+                13: parseInt(document.getElementById('auto-color').value),
+                14: parseInt(document.getElementById('strobe').value),
+                15: parseInt(document.getElementById('dimmer').value),
+                16: parseInt(document.getElementById('safety').value),
+            };
+            
+            const data = {};
+            data[sceneKey] = channels;
+            
+            fetch('/api/config', {
+                method: 'POST',
+                headers: getApiHeaders(),
+                body: JSON.stringify(data)
+            })
+            .then(response => response.json().then(data => ({ok: response.ok, data})))
+            .then(({ok, data}) => {
+                if (ok && data.success) {
+                    showToast('✅ Scene saved!');
+                } else {
+                    throw new Error('Scene save failed');
+                }
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                showToast('❌ Error saving scene', true);
+            });
+        }
+        
+        // Prevent polling from overwriting sliders while user is dragging
+        document.querySelectorAll('input[type="range"]').forEach(slider => {
+            slider.addEventListener('mousedown', () => { activeSlider = slider.id; });
+            slider.addEventListener('touchstart', () => { activeSlider = slider.id; });
+        });
+        document.addEventListener('mouseup', () => { activeSlider = null; });
+        document.addEventListener('touchend', () => { activeSlider = null; });
+
+        function showTab(tabName, btn) {
+            // Hide all tab contents
+            document.querySelectorAll('.tab-content').forEach(tc => {
+                tc.classList.remove('active');
+            });
+            document.querySelectorAll('.tab').forEach(tb => {
+                tb.classList.remove('active');
+            });
+
+            // Show selected tab
+            document.getElementById(tabName).classList.add('active');
+            btn.classList.add('active');
+        }
+    </script>
+</body>
+</html>
