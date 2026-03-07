@@ -473,6 +473,41 @@
                 </div>
 
                 <div style="margin-top: 25px; padding-top: 20px; border-top: 1px solid #2a2a3a;">
+                    <h2>DMX Channel Tester</h2>
+                    <p style="color: #71717a; font-size: 13px; margin-bottom: 12px;">
+                        Test one channel at a time (all others set to 0) to discover your fixture's DMX channel mapping.
+                        Note what each channel does, then select the matching profile above.
+                    </p>
+                    <div class="grid-2">
+                        <div class="form-group">
+                            <label>Channel to Test</label>
+                            <input type="number" id="test-channel-num" min="1" max="512" value="1">
+                        </div>
+                        <div class="form-group">
+                            <label>Value (0-255)</label>
+                            <input type="number" id="test-channel-val" min="0" max="255" value="255">
+                        </div>
+                    </div>
+                    <div style="display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px;">
+                        <button class="btn-primary btn-sm" onclick="testChannel()">Test This Channel</button>
+                        <button class="btn-secondary btn-sm" onclick="testChannelPrev()">&#9664; Prev</button>
+                        <button class="btn-secondary btn-sm" onclick="testChannelNext()">Next &#9654;</button>
+                        <button class="btn-danger btn-sm" onclick="blackout()">Stop (Blackout)</button>
+                    </div>
+                    <div id="test-channel-info" style="color: #a1a1aa; font-size: 12px; margin-top: 10px;"></div>
+                    <div style="margin-top: 12px; padding: 12px; background: #0f0f14; border-radius: 8px; border: 1px solid #2a2a3a;">
+                        <div style="font-size: 11px; font-weight: 600; color: #71717a; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px;">Common RGBW Channel Maps (what channel 1 should be)</div>
+                        <div style="font-size: 12px; color: #a1a1aa; line-height: 1.8;">
+                            <strong style="color:#60a5fa">4ch:</strong> Red, Green, Blue, White<br>
+                            <strong style="color:#60a5fa">5ch:</strong> Dimmer, Red, Green, Blue, White<br>
+                            <strong style="color:#60a5fa">6ch:</strong> Dimmer, Strobe, Red, Green, Blue, White<br>
+                            <strong style="color:#60a5fa">7ch:</strong> Dimmer, Strobe, ColorMacro, Red, Green, Blue, White<br>
+                            <strong style="color:#60a5fa">8ch:</strong> Dimmer, Red, Green, Blue, White, Strobe, Mode, Speed
+                        </div>
+                    </div>
+                </div>
+
+                <div style="margin-top: 25px; padding-top: 20px; border-top: 1px solid #2a2a3a;">
                     <h2>Channel Labels</h2>
                     <p style="color: #71717a; font-size: 13px; margin-bottom: 12px;">
                         Click any channel label in the Channels tab to rename it. Labels are saved automatically.
@@ -1296,6 +1331,43 @@
             updateStatus();
         })
         .catch(err => showToast(err.message, true));
+    }
+
+    // ============================================
+    // Channel Tester
+    // ============================================
+    function testChannel() {
+        const ch = parseInt(document.getElementById('test-channel-num').value) || 1;
+        const val = parseInt(document.getElementById('test-channel-val').value) || 255;
+        const info = document.getElementById('test-channel-info');
+        info.textContent = `Testing channel ${ch} at value ${val}... All other channels = 0`;
+
+        fetch('/api/test-channel', {
+            method: 'POST', headers,
+            body: JSON.stringify({channel: ch, value: val})
+        })
+        .then(r => r.json().then(d => ({ok: r.ok, data: d})))
+        .then(({ok, data}) => {
+            if (!ok) throw new Error(data.error || 'Failed');
+            info.innerHTML = `<span style="color:#22c55e">Channel ${ch} = ${val}</span> | All others = 0. What do you see?`;
+            updateStatus();
+        })
+        .catch(err => {
+            info.textContent = 'Error: ' + err.message;
+            showToast(err.message, true);
+        });
+    }
+
+    function testChannelNext() {
+        const input = document.getElementById('test-channel-num');
+        input.value = Math.min(512, (parseInt(input.value) || 0) + 1);
+        testChannel();
+    }
+
+    function testChannelPrev() {
+        const input = document.getElementById('test-channel-num');
+        input.value = Math.max(1, (parseInt(input.value) || 2) - 1);
+        testChannel();
     }
 
     // ============================================

@@ -1351,8 +1351,44 @@ FIXTURE_PROFILES = {
             3: 'Blue',
         },
     },
-    'stadium-pro-3-rgbw': {
-        'name': 'Stadium Pro III - RGBW (7ch)',
+    'stadium-pro-3-rgbw-4ch': {
+        'name': 'Stadium Pro III - RGBW (4ch: R/G/B/W)',
+        'manufacturer': 'RuggedGrade',
+        'channels_per_fixture': 4,
+        'channel_map': {
+            1: 'Red',
+            2: 'Green',
+            3: 'Blue',
+            4: 'White',
+        },
+    },
+    'stadium-pro-3-rgbw-5ch': {
+        'name': 'Stadium Pro III - RGBW (5ch: Dim/R/G/B/W)',
+        'manufacturer': 'RuggedGrade',
+        'channels_per_fixture': 5,
+        'channel_map': {
+            1: 'Dimmer',
+            2: 'Red',
+            3: 'Green',
+            4: 'Blue',
+            5: 'White',
+        },
+    },
+    'stadium-pro-3-rgbw-6ch': {
+        'name': 'Stadium Pro III - RGBW (6ch: Dim/Strobe/R/G/B/W)',
+        'manufacturer': 'RuggedGrade',
+        'channels_per_fixture': 6,
+        'channel_map': {
+            1: 'Dimmer',
+            2: 'Strobe',
+            3: 'Red',
+            4: 'Green',
+            5: 'Blue',
+            6: 'White',
+        },
+    },
+    'stadium-pro-3-rgbw-7ch': {
+        'name': 'Stadium Pro III - RGBW (7ch: Dim/Strobe/Macro/R/G/B/W)',
         'manufacturer': 'RuggedGrade',
         'channels_per_fixture': 7,
         'channel_map': {
@@ -1363,6 +1399,21 @@ FIXTURE_PROFILES = {
             5: 'Green',
             6: 'Blue',
             7: 'White',
+        },
+    },
+    'stadium-pro-3-rgbw-8ch': {
+        'name': 'Stadium Pro III - RGBW (8ch: Dim/R/G/B/W/Strobe/Mode/Speed)',
+        'manufacturer': 'RuggedGrade',
+        'channels_per_fixture': 8,
+        'channel_map': {
+            1: 'Dimmer',
+            2: 'Red',
+            3: 'Green',
+            4: 'Blue',
+            5: 'White',
+            6: 'Strobe',
+            7: 'Mode',
+            8: 'Speed',
         },
     },
     'generic-rgb': {
@@ -1470,6 +1521,32 @@ def api_apply_fixture_profile():
         'visible_channels': config.VISIBLE_CHANNELS,
         'channel_labels': {str(k): v for k, v in config.CHANNEL_LABELS.items()},
     })
+
+# ============================================
+# Channel Tester
+# ============================================
+
+@app.route('/api/test-channel', methods=['POST'])
+def api_test_channel():
+    """Set a single channel to a value, all others to 0. For DMX mapping discovery."""
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict) or 'channel' not in data:
+        return jsonify({'error': 'Missing channel'}), 400
+
+    channel = max(1, min(512, int(data['channel'])))
+    value = max(0, min(255, int(data.get('value', 255))))
+
+    # Zero all channels first
+    for i in range(512):
+        state.channels[i] = 0
+
+    # Set the target channel
+    state.channels[channel - 1] = value
+    state.dirty = True
+
+    logger.info("Channel test: ch %d = %d (all others = 0)", channel, value)
+    return jsonify({'success': True, 'channel': channel, 'value': value})
+
 
 # ============================================
 # Health Check
