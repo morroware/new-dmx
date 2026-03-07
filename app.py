@@ -1352,14 +1352,17 @@ FIXTURE_PROFILES = {
         },
     },
     'stadium-pro-3-rgbw': {
-        'name': 'Stadium Pro III - RGBW (4ch)',
+        'name': 'Stadium Pro III - RGBW (7ch)',
         'manufacturer': 'RuggedGrade',
-        'channels_per_fixture': 4,
+        'channels_per_fixture': 7,
         'channel_map': {
-            1: 'Red',
-            2: 'Green',
-            3: 'Blue',
-            4: 'White',
+            1: 'Dimmer',
+            2: 'Strobe',
+            3: 'Color Macro',
+            4: 'Red',
+            5: 'Green',
+            6: 'Blue',
+            7: 'White',
         },
     },
     'generic-rgb': {

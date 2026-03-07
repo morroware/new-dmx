@@ -140,6 +140,76 @@
             font-size: 16px; font-weight: 700; color: #3b82f6;
             font-family: 'SF Mono', 'Consolas', monospace; min-width: 35px; text-align: right;
         }
+        /* Color-coded channel items */
+        .channel-item[data-color="red"] { border-color: #7f1d1d; }
+        .channel-item[data-color="red"] .channel-value { color: #ef4444; }
+        .channel-item[data-color="red"] input[type="range"]::-webkit-slider-thumb { background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%); box-shadow: 0 2px 8px rgba(239,68,68,0.5); }
+        .channel-item[data-color="red"] input[type="range"]::-moz-range-thumb { background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%); }
+        .channel-item[data-color="green"] { border-color: #14532d; }
+        .channel-item[data-color="green"] .channel-value { color: #22c55e; }
+        .channel-item[data-color="green"] input[type="range"]::-webkit-slider-thumb { background: linear-gradient(135deg, #22c55e 0%, #16a34a 100%); box-shadow: 0 2px 8px rgba(34,197,94,0.5); }
+        .channel-item[data-color="green"] input[type="range"]::-moz-range-thumb { background: linear-gradient(135deg, #22c55e 0%, #16a34a 100%); }
+        .channel-item[data-color="blue"] { border-color: #1e3a5f; }
+        .channel-item[data-color="blue"] .channel-value { color: #3b82f6; }
+        .channel-item[data-color="blue"] input[type="range"]::-webkit-slider-thumb { background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%); box-shadow: 0 2px 8px rgba(59,130,246,0.5); }
+        .channel-item[data-color="blue"] input[type="range"]::-moz-range-thumb { background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%); }
+        .channel-item[data-color="white"] { border-color: #525252; }
+        .channel-item[data-color="white"] .channel-value { color: #e4e4e7; }
+        .channel-item[data-color="white"] input[type="range"]::-webkit-slider-thumb { background: linear-gradient(135deg, #e4e4e7 0%, #a1a1aa 100%); box-shadow: 0 2px 8px rgba(228,228,231,0.5); }
+        .channel-item[data-color="white"] input[type="range"]::-moz-range-thumb { background: linear-gradient(135deg, #e4e4e7 0%, #a1a1aa 100%); }
+        .channel-item[data-color="dimmer"] { border-color: #854d0e; }
+        .channel-item[data-color="dimmer"] .channel-value { color: #eab308; }
+        .channel-item[data-color="dimmer"] input[type="range"]::-webkit-slider-thumb { background: linear-gradient(135deg, #eab308 0%, #ca8a04 100%); box-shadow: 0 2px 8px rgba(234,179,8,0.5); }
+        .channel-item[data-color="dimmer"] input[type="range"]::-moz-range-thumb { background: linear-gradient(135deg, #eab308 0%, #ca8a04 100%); }
+        /* Fixture control panel */
+        .fixture-panel { margin-bottom: 20px; }
+        .fixture-panel h2 { margin-bottom: 12px; }
+        .fixture-master-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+            gap: 12px;
+            margin-bottom: 16px;
+        }
+        .fixture-master-item {
+            background: #0f0f14;
+            border: 1px solid #2a2a3a;
+            border-radius: 8px;
+            padding: 14px 16px;
+        }
+        .fixture-master-item .channel-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+        .fixture-master-item .channel-label { font-size: 13px; color: #e4e4e7; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; cursor: default; border-bottom: none; }
+        .fixture-master-item .channel-value { font-size: 16px; font-weight: 700; font-family: 'SF Mono', 'Consolas', monospace; min-width: 35px; text-align: right; }
+        .all-fixtures-panel {
+            background: linear-gradient(145deg, #1a1a2e 0%, #16162a 100%);
+            border: 1px solid #3b82f6;
+            border-radius: 10px;
+            padding: 18px;
+            margin-bottom: 16px;
+        }
+        .all-fixtures-panel h3 { color: #60a5fa; font-size: 14px; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 14px; }
+        .all-fixtures-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+            gap: 10px;
+        }
+        .all-fixtures-item {
+            background: #0f0f18;
+            border-radius: 8px;
+            padding: 10px 14px;
+        }
+        .all-fixtures-item .af-label { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; display: flex; justify-content: space-between; }
+        .all-fixtures-item input[type="range"] { width: 100%; }
+        .fixture-separator {
+            grid-column: 1 / -1;
+            border-top: 1px solid #2a2a3a;
+            margin: 4px 0;
+            padding-top: 8px;
+            color: #71717a;
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
         .scene-list { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 15px; }
         .scene-btn {
             padding: 10px 16px; font-size: 12px; font-weight: 600; border: 1px solid #3f3f46;
@@ -246,13 +316,26 @@
 
         <!-- Channels Tab -->
         <div id="channels-tab" class="tab-content active">
+            <!-- Fixture Control Panel (shown when fixture profile is applied) -->
+            <div id="fixture-control-panel" class="card fixture-panel" style="border-top-left-radius: 0; border-top-right-radius: 0; border-top: none; display: none;">
+                <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 16px;">
+                    <h2 style="margin-bottom: 0;">Fixture Control</h2>
+                    <div style="display: flex; gap: 8px; align-items: center;">
+                        <button class="btn-warning btn-sm" onclick="setAllFixtureDimmers(255)">ALL DIMMERS ON</button>
+                        <button class="btn-danger btn-sm" onclick="blackout()">BLACKOUT</button>
+                        <button class="btn-success btn-sm" id="trigger-btn" onclick="trigger()">TRIGGER</button>
+                    </div>
+                </div>
+                <div id="all-fixtures-control"></div>
+                <div id="fixture-groups"></div>
+            </div>
+
             <div class="card" style="border-top-left-radius: 0; border-top-right-radius: 0; border-top: none;">
                 <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 20px;">
                     <h2 style="margin-bottom: 0;">DMX Channels</h2>
                     <div style="display: flex; gap: 8px; align-items: center;">
                         <button class="btn-warning btn-sm" onclick="setAllChannels(255)">ALL ON</button>
                         <button class="btn-danger btn-sm" onclick="blackout()">BLACKOUT</button>
-                        <button class="btn-success btn-sm" id="trigger-btn" onclick="trigger()">TRIGGER</button>
                     </div>
                 </div>
                 <div id="channel-grid" class="channel-grid">
@@ -516,6 +599,16 @@
     // ============================================
     let listenersAttached = false;
 
+    function getChannelColor(ch) {
+        const label = (channelLabels[ch] || '').toLowerCase();
+        if (label.includes('red')) return 'red';
+        if (label.includes('green')) return 'green';
+        if (label.includes('blue')) return 'blue';
+        if (label.includes('white')) return 'white';
+        if (label.includes('dimmer')) return 'dimmer';
+        return '';
+    }
+
     function renderChannels() {
         const grid = document.getElementById('channel-grid');
         const existingCount = grid.children.length;
@@ -525,9 +618,11 @@
         grid.innerHTML = '';
         for (let ch = 1; ch <= visibleChannels; ch++) {
             const label = channelLabels[ch] || `Channel ${ch}`;
+            const colorAttr = getChannelColor(ch);
             const item = document.createElement('div');
             item.className = 'channel-item';
             item.id = `ch-item-${ch}`;
+            if (colorAttr) item.setAttribute('data-color', colorAttr);
             item.innerHTML = `
                 <div class="channel-header">
                     <span class="channel-label" id="ch-label-${ch}" onclick="openLabelModal(${ch})" title="Click to rename">${label}</span>
@@ -540,6 +635,7 @@
             grid.appendChild(item);
         }
         document.getElementById('channel-count-label').textContent = `${visibleChannels} channels`;
+        renderFixturePanel();
 
         // Only attach global listeners once
         if (!listenersAttached) {
@@ -556,6 +652,11 @@
             const sliderEl = document.getElementById(`ch-slider-${chNum}`);
             if (valEl) valEl.textContent = val;
             if (sliderEl && activeSlider !== chNum) sliderEl.value = val;
+            // Sync fixture panel
+            const afVal = document.getElementById(`af-val-${chNum}`);
+            if (afVal) afVal.textContent = val;
+            const afSlider = document.getElementById(`af-slider-${chNum}`);
+            if (afSlider) afSlider.value = val;
         }
     }
 
@@ -570,6 +671,145 @@
         const valEl = document.getElementById(`ch-val-${channel}`);
         if (valEl) valEl.textContent = value;
         queueChannelUpdate(channel, value);
+        // Update fixture panel value display if it exists
+        const afVal = document.getElementById(`af-val-${channel}`);
+        if (afVal) afVal.textContent = value;
+    }
+
+    // ============================================
+    // Fixture Control Panel
+    // ============================================
+    let fixtureInfo = null; // { channels_per_fixture, fixtures: [{base, channels: {offset: label}}] }
+
+    function detectFixtureLayout() {
+        // Detect fixture groupings from channel labels like "F1 Red", "F2 Dimmer", etc.
+        const fixtureMap = {};
+        for (const [ch, label] of Object.entries(channelLabels)) {
+            const match = label.match(/^F(\d+)\s+(.+)$/);
+            if (match) {
+                const fIdx = parseInt(match[1]);
+                if (!fixtureMap[fIdx]) fixtureMap[fIdx] = {};
+                fixtureMap[fIdx][parseInt(ch)] = match[2];
+            }
+        }
+        const fixtureKeys = Object.keys(fixtureMap).map(Number).sort((a,b) => a-b);
+        if (fixtureKeys.length < 1) return null;
+
+        const fixtures = fixtureKeys.map(idx => {
+            const channels = fixtureMap[idx];
+            const chNums = Object.keys(channels).map(Number).sort((a,b) => a-b);
+            return { index: idx, base: chNums[0], channels };
+        });
+        const chPerFixture = Object.keys(fixtures[0].channels).length;
+        return { channels_per_fixture: chPerFixture, fixtures };
+    }
+
+    function renderFixturePanel() {
+        fixtureInfo = detectFixtureLayout();
+        const panel = document.getElementById('fixture-control-panel');
+        const allCtrl = document.getElementById('all-fixtures-control');
+        const groups = document.getElementById('fixture-groups');
+
+        if (!fixtureInfo || fixtureInfo.fixtures.length < 1) {
+            panel.style.display = 'none';
+            return;
+        }
+
+        panel.style.display = 'block';
+
+        // Determine which color channels exist (from first fixture)
+        const firstFixture = fixtureInfo.fixtures[0];
+        const colorChannels = []; // [{label, offset}]
+        for (const [ch, label] of Object.entries(firstFixture.channels)) {
+            const lbl = label.toLowerCase();
+            if (['red', 'green', 'blue', 'white', 'dimmer'].includes(lbl)) {
+                colorChannels.push({ label, ch: parseInt(ch), offsetFromBase: parseInt(ch) - firstFixture.base });
+            }
+        }
+
+        // Build "All Fixtures" control
+        const colorMap = { 'red': '#ef4444', 'green': '#22c55e', 'blue': '#3b82f6', 'white': '#e4e4e7', 'dimmer': '#eab308' };
+        let allHtml = '<div class="all-fixtures-panel"><h3>All Fixtures</h3><div class="all-fixtures-grid">';
+        for (const cc of colorChannels) {
+            const lbl = cc.label.toLowerCase();
+            const color = colorMap[lbl] || '#3b82f6';
+            allHtml += `
+                <div class="all-fixtures-item">
+                    <div class="af-label"><span style="color:${color}">${cc.label}</span><span id="af-all-val-${lbl}" style="color:${color};font-family:monospace;font-weight:700">0</span></div>
+                    <input type="range" min="0" max="255" value="0"
+                           oninput="onAllFixtureSlider('${lbl}', ${cc.offsetFromBase}, this.value)">
+                </div>`;
+        }
+        allHtml += '</div></div>';
+        allCtrl.innerHTML = allHtml;
+
+        // Build per-fixture groups
+        let groupHtml = '';
+        for (const fixture of fixtureInfo.fixtures) {
+            groupHtml += `<div style="margin-bottom: 12px;"><div class="fixture-separator">Fixture ${fixture.index}</div>`;
+            groupHtml += '<div class="fixture-master-grid">';
+            for (const [ch, label] of Object.entries(fixture.channels)) {
+                const lbl = label.toLowerCase();
+                const color = colorMap[lbl] || '#3b82f6';
+                const isColor = ['red','green','blue','white','dimmer'].includes(lbl);
+                groupHtml += `
+                    <div class="fixture-master-item">
+                        <div class="channel-header">
+                            <span class="channel-label" style="color:${isColor ? color : '#a1a1aa'};cursor:default;border:none">${label}</span>
+                            <span class="channel-value" id="af-val-${ch}" style="color:${isColor ? color : '#3b82f6'}">0</span>
+                        </div>
+                        <input type="range" id="af-slider-${ch}" min="0" max="255" value="0"
+                               oninput="onFixturePanelSlider(${ch}, this.value)">
+                    </div>`;
+            }
+            groupHtml += '</div></div>';
+        }
+        groups.innerHTML = groupHtml;
+    }
+
+    function onFixturePanelSlider(ch, value) {
+        value = parseInt(value);
+        // Update the main channel slider too
+        const slider = document.getElementById(`ch-slider-${ch}`);
+        if (slider) slider.value = value;
+        const valEl = document.getElementById(`ch-val-${ch}`);
+        if (valEl) valEl.textContent = value;
+        const afVal = document.getElementById(`af-val-${ch}`);
+        if (afVal) afVal.textContent = value;
+        queueChannelUpdate(ch, value);
+    }
+
+    function onAllFixtureSlider(label, offsetFromBase, value) {
+        value = parseInt(value);
+        const valEl = document.getElementById(`af-all-val-${label}`);
+        if (valEl) valEl.textContent = value;
+        if (!fixtureInfo) return;
+        for (const fixture of fixtureInfo.fixtures) {
+            const ch = fixture.base + offsetFromBase;
+            // Update fixture panel slider
+            const afSlider = document.getElementById(`af-slider-${ch}`);
+            if (afSlider) afSlider.value = value;
+            const afVal = document.getElementById(`af-val-${ch}`);
+            if (afVal) afVal.textContent = value;
+            // Update main channel slider
+            const slider = document.getElementById(`ch-slider-${ch}`);
+            if (slider) slider.value = value;
+            const chVal = document.getElementById(`ch-val-${ch}`);
+            if (chVal) chVal.textContent = value;
+            queueChannelUpdate(ch, value);
+        }
+    }
+
+    function setAllFixtureDimmers(value) {
+        if (!fixtureInfo) { setAllChannels(value); return; }
+        for (const fixture of fixtureInfo.fixtures) {
+            for (const [ch, label] of Object.entries(fixture.channels)) {
+                if (label.toLowerCase() === 'dimmer') {
+                    onFixturePanelSlider(parseInt(ch), value);
+                }
+            }
+        }
+        showToast(value === 0 ? 'All dimmers off' : `All dimmers set to ${value}`);
     }
 
     function addChannels() {
@@ -1049,6 +1289,8 @@
             showToast(`Applied: ${data.profile}`);
             if (data.channel_labels) channelLabels = data.channel_labels;
             if (data.visible_channels) visibleChannels = data.visible_channels;
+            // Force re-render by clearing grid
+            document.getElementById('channel-grid').innerHTML = '';
             renderChannels();
             updateLabelDisplays();
             updateStatus();
