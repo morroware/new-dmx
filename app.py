@@ -105,6 +105,9 @@ class Config:
     ARTNET_SUBNET = 0
     ARTNET_NET = 0
 
+    # Art-Net Receiver mode — listen for incoming ArtNet and output via ENTTEC
+    ARTNET_RECEIVER_ENABLED = os.environ.get("DMX_ARTNET_RECEIVER", "false").lower() in ("1", "true", "yes")
+
     # Trigger timing
     TRIGGER_DURATION = 10.0  # seconds
     TRIGGER_SCENE = None  # scene id to apply on trigger (None = disabled)
@@ -141,6 +144,7 @@ def save_config():
             'artnet_enabled': config.ARTNET_ENABLED,
             'artnet_target_ip': config.ARTNET_TARGET_IP,
             'artnet_universe': config.ARTNET_UNIVERSE,
+            'artnet_receiver_enabled': config.ARTNET_RECEIVER_ENABLED,
             'scenes': {}
         }
         for sid, scene in config.SCENES.items():
@@ -185,6 +189,8 @@ def load_config():
             config.ARTNET_TARGET_IP = str(data['artnet_target_ip'])
         if 'artnet_universe' in data:
             config.ARTNET_UNIVERSE = int(data['artnet_universe'])
+        if 'artnet_receiver_enabled' in data:
+            config.ARTNET_RECEIVER_ENABLED = bool(data['artnet_receiver_enabled'])
 
         if 'channel_labels' in data and isinstance(data['channel_labels'], dict):
             config.CHANNEL_LABELS = {}
@@ -238,6 +244,12 @@ class SystemState:
         # Art-Net
         self.artnet_socket = None
         self.artnet_sequence = 0
+        # Art-Net Receiver
+        self.artnet_receiver_socket = None
+        self.artnet_receiver_thread = None
+        self.artnet_receiver_running = False
+        self.artnet_receiver_packets = 0
+        self.artnet_receiver_last_seen = 0  # monotonic timestamp of last packet
 
 state = SystemState()
 
@@ -316,6 +328,122 @@ def send_artnet_frame():
         )
     except Exception as e:
         logger.warning("Art-Net send error: %s", e)
+
+# ============================================
+# Art-Net Receiver Functions
+# ============================================
+
+def parse_artnet_dmx(packet):
+    """Parse an Art-Net ArtDmx packet. Returns (universe, dmx_data) or None."""
+    if len(packet) < 18:
+        return None
+    # Check header
+    if packet[:8] != ARTNET_HEADER:
+        return None
+    # Check opcode (little-endian)
+    opcode = struct.unpack('<H', packet[8:10])[0]
+    if opcode != ARTNET_OPCODE_DMX:
+        return None
+    # Universe: low byte at offset 14, high byte at offset 15
+    universe_lo = packet[14]
+    universe_hi = packet[15]
+    universe = universe_lo | (universe_hi << 8)
+    # Data length (big-endian) at offset 16
+    data_length = struct.unpack('>H', packet[16:18])[0]
+    if len(packet) < 18 + data_length:
+        return None
+    dmx_data = packet[18:18 + data_length]
+    return (universe, dmx_data)
+
+
+def init_artnet_receiver():
+    """Initialize Art-Net receiver socket (bind to port 6454)."""
+    if not config.ARTNET_RECEIVER_ENABLED:
+        return False
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        sock.bind(('0.0.0.0', config.ARTNET_PORT))
+        sock.settimeout(1.0)  # Allow periodic checks for shutdown
+        state.artnet_receiver_socket = sock
+        logger.info("Art-Net receiver listening on 0.0.0.0:%d (universe %d)",
+                     config.ARTNET_PORT, config.ARTNET_UNIVERSE)
+        return True
+    except Exception as e:
+        logger.error("Could not start Art-Net receiver: %s", e)
+        state.artnet_receiver_socket = None
+        return False
+
+
+def artnet_receiver_thread():
+    """Background thread: listens for ArtNet packets and updates DMX data."""
+    logger.info("Art-Net receiver thread started (universe %d)", config.ARTNET_UNIVERSE)
+    while state.artnet_receiver_running:
+        try:
+            sock = state.artnet_receiver_socket
+            if sock is None:
+                time.sleep(1.0)
+                continue
+            try:
+                data, addr = sock.recvfrom(1024)
+            except socket.timeout:
+                continue
+
+            result = parse_artnet_dmx(data)
+            if result is None:
+                continue
+
+            universe, dmx_payload = result
+
+            # Only accept packets for our configured universe
+            if universe != config.ARTNET_UNIVERSE:
+                continue
+
+            # Write received DMX data into our buffer
+            with state.dmx_lock:
+                for i, val in enumerate(dmx_payload):
+                    ch = i + 1
+                    if ch > config.DMX_CHANNELS:
+                        break
+                    state.dmx_data[ch] = val
+
+            state.artnet_receiver_packets += 1
+            state.artnet_receiver_last_seen = time.monotonic()
+
+        except Exception as e:
+            if state.artnet_receiver_running:
+                logger.warning("Art-Net receiver error: %s", e)
+            time.sleep(0.1)
+
+    logger.info("Art-Net receiver thread stopped")
+
+
+def start_artnet_receiver():
+    """Start the Art-Net receiver thread."""
+    if state.artnet_receiver_thread is not None and state.artnet_receiver_thread.is_alive():
+        return
+    if not init_artnet_receiver():
+        return
+    state.artnet_receiver_running = True
+    state.artnet_receiver_packets = 0
+    state.artnet_receiver_last_seen = 0
+    state.artnet_receiver_thread = Thread(target=artnet_receiver_thread, daemon=True)
+    state.artnet_receiver_thread.start()
+
+
+def stop_artnet_receiver():
+    """Stop the Art-Net receiver thread."""
+    state.artnet_receiver_running = False
+    if state.artnet_receiver_thread is not None:
+        state.artnet_receiver_thread.join(timeout=3)
+        state.artnet_receiver_thread = None
+    if state.artnet_receiver_socket is not None:
+        try:
+            state.artnet_receiver_socket.close()
+        except Exception:
+            pass
+        state.artnet_receiver_socket = None
+
 
 # ============================================
 # ENTTEC DMX Functions
@@ -917,6 +1045,10 @@ def api_status():
         'artnet_enabled': config.ARTNET_ENABLED,
         'artnet_target_ip': config.ARTNET_TARGET_IP,
         'artnet_universe': config.ARTNET_UNIVERSE,
+        'artnet_receiver_enabled': config.ARTNET_RECEIVER_ENABLED,
+        'artnet_receiver_active': state.artnet_receiver_running and state.artnet_receiver_thread is not None and state.artnet_receiver_thread.is_alive(),
+        'artnet_receiver_packets': state.artnet_receiver_packets,
+        'artnet_receiver_last_seen': round(time.monotonic() - state.artnet_receiver_last_seen, 1) if state.artnet_receiver_last_seen > 0 else None,
         'channels': get_current_channels(),
         'channel_labels': {str(k): v for k, v in config.CHANNEL_LABELS.items()},
     })
@@ -1127,11 +1259,29 @@ def api_config():
                 except (TypeError, ValueError):
                     pass
 
+        if 'artnet_receiver_enabled' in data:
+            was_receiver = config.ARTNET_RECEIVER_ENABLED
+            config.ARTNET_RECEIVER_ENABLED = bool(data['artnet_receiver_enabled'])
+            if config.ARTNET_RECEIVER_ENABLED and not was_receiver:
+                # Disable sender when enabling receiver
+                config.ARTNET_ENABLED = False
+                if state.artnet_socket:
+                    state.artnet_socket.close()
+                    state.artnet_socket = None
+                start_artnet_receiver()
+            elif not config.ARTNET_RECEIVER_ENABLED and was_receiver:
+                stop_artnet_receiver()
+
         if 'artnet_enabled' in data:
             was_enabled = config.ARTNET_ENABLED
             config.ARTNET_ENABLED = bool(data['artnet_enabled'])
-            if config.ARTNET_ENABLED and not was_enabled:
-                init_artnet()
+            if config.ARTNET_ENABLED:
+                # Disable receiver when enabling sender
+                if config.ARTNET_RECEIVER_ENABLED:
+                    config.ARTNET_RECEIVER_ENABLED = False
+                    stop_artnet_receiver()
+                if not was_enabled:
+                    init_artnet()
             elif not config.ARTNET_ENABLED and was_enabled:
                 if state.artnet_socket:
                     state.artnet_socket.close()
@@ -1158,6 +1308,7 @@ def api_config():
             'artnet_enabled': config.ARTNET_ENABLED,
             'artnet_target_ip': config.ARTNET_TARGET_IP,
             'artnet_universe': config.ARTNET_UNIVERSE,
+            'artnet_receiver_enabled': config.ARTNET_RECEIVER_ENABLED,
             'contact_pin': config.CONTACT_PIN,
             'safety_switch_pin': config.SAFETY_SWITCH_PIN,
             'scenes': {sid: {'name': s['name'], 'channels': s['channels']} for sid, s in config.SCENES.items()},
@@ -1200,6 +1351,8 @@ def api_health():
         'enttec_last_error': state.enttec_last_error,
         'dmx_running': healthy,
         'artnet_enabled': config.ARTNET_ENABLED,
+        'artnet_receiver_enabled': config.ARTNET_RECEIVER_ENABLED,
+        'artnet_receiver_active': state.artnet_receiver_running,
         'gpio_available': GPIO_AVAILABLE,
         'gpio_ready': state.gpio_ready,
         'safe_to_operate': is_safe_to_operate(),
@@ -1299,6 +1452,8 @@ def _cleanup():
             pass
         state.artnet_socket = None
 
+    stop_artnet_receiver()
+
     if GPIO_AVAILABLE:
         try:
             if GPIO_LIB == 'gpiod' and state.gpio_line is not None:
@@ -1331,7 +1486,11 @@ def _initialize():
         if not init_enttec():
             logger.warning("ENTTEC not available at startup. Will keep retrying in the background.")
 
-    if config.ARTNET_ENABLED:
+    # Art-Net sender and receiver are mutually exclusive
+    if config.ARTNET_RECEIVER_ENABLED:
+        config.ARTNET_ENABLED = False  # Disable sender when in receiver mode
+        start_artnet_receiver()
+    elif config.ARTNET_ENABLED:
         init_artnet()
 
     start_dmx_refresh()
@@ -1349,7 +1508,9 @@ def _initialize():
         outputs.append("ENTTEC USB")
     elif FTDI_AVAILABLE:
         outputs.append("ENTTEC USB (retrying)")
-    if config.ARTNET_ENABLED:
+    if config.ARTNET_RECEIVER_ENABLED:
+        outputs.append(f"Art-Net Receiver (universe {config.ARTNET_UNIVERSE})")
+    elif config.ARTNET_ENABLED:
         outputs.append(f"Art-Net ({config.ARTNET_TARGET_IP} universe {config.ARTNET_UNIVERSE})")
 
     logger.info("=" * 50)

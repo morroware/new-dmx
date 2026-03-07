@@ -222,6 +222,7 @@
                 <div class="status-item">
                     <div class="status-label">Art-Net</div>
                     <div class="status-value" id="artnet-status">--</div>
+                    <div id="artnet-receiver-info" style="font-size: 10px; color: #71717a; margin-top: 4px; display: none;"></div>
                 </div>
                 <div class="status-item">
                     <div class="status-label">Scene</div>
@@ -314,26 +315,52 @@
         <!-- Settings Tab -->
         <div id="settings-tab" class="tab-content">
             <div class="card" style="border-top-left-radius: 0; border-top-right-radius: 0; border-top: none;">
-                <h2>Art-Net Output</h2>
-                <div class="grid-2">
-                    <div class="form-group">
-                        <label>
-                            <input type="checkbox" id="artnet-enabled" style="width: auto; margin-right: 8px;"
-                                   onchange="saveArtnetConfig()">
-                            Enable Art-Net Output
-                        </label>
-                    </div>
-                    <div></div>
-                    <div class="form-group">
-                        <label>Target IP</label>
-                        <input type="text" id="artnet-ip" placeholder="255.255.255.255" value="255.255.255.255">
-                    </div>
-                    <div class="form-group">
-                        <label>Universe</label>
-                        <input type="number" id="artnet-universe" min="0" max="32767" value="0">
+                <h2>Art-Net Mode</h2>
+                <div class="form-group">
+                    <label>Operating Mode</label>
+                    <select id="artnet-mode" onchange="onArtnetModeChange()">
+                        <option value="disabled">Disabled</option>
+                        <option value="sender">Sender (output Art-Net to network)</option>
+                        <option value="receiver">Receiver (listen for Art-Net, output via ENTTEC)</option>
+                    </select>
+                </div>
+
+                <div id="artnet-sender-config">
+                    <div class="grid-2">
+                        <div class="form-group">
+                            <label>Target IP</label>
+                            <input type="text" id="artnet-ip" placeholder="255.255.255.255" value="255.255.255.255">
+                        </div>
+                        <div class="form-group">
+                            <label>Universe</label>
+                            <input type="number" id="artnet-universe" min="0" max="32767" value="0">
+                        </div>
                     </div>
                 </div>
-                <button class="btn-primary btn-sm" onclick="saveArtnetConfig()">Save Art-Net Settings</button>
+
+                <div id="artnet-receiver-config" style="display: none;">
+                    <div class="grid-2">
+                        <div class="form-group">
+                            <label>Listen Universe</label>
+                            <input type="number" id="artnet-recv-universe" min="0" max="32767" value="0">
+                        </div>
+                        <div class="status-item">
+                            <div class="status-label">Packets Received</div>
+                            <div class="status-value" id="recv-packets">0</div>
+                        </div>
+                        <div class="status-item">
+                            <div class="status-label">Last Packet</div>
+                            <div class="status-value" id="recv-last-seen">--</div>
+                        </div>
+                    </div>
+                    <div class="info-text">
+                        <strong>Receiver Mode:</strong> This Pi listens for Art-Net packets on port 6454 and outputs
+                        the received DMX data via the ENTTEC USB adapter. Channel sliders become read-only and show
+                        incoming values. The sender Pi should target this Pi's IP address.
+                    </div>
+                </div>
+
+                <button class="btn-primary btn-sm" style="margin-top: 12px;" onclick="saveArtnetConfig()">Save Art-Net Settings</button>
 
                 <div style="margin-top: 25px; padding-top: 20px; border-top: 1px solid #2a2a3a;">
                     <h2>Channel Labels</h2>
@@ -393,6 +420,7 @@
     let activeSlider = null;
     let connectionOk = true;
     let consecutiveErrors = 0;
+    let receiverMode = false;
 
     const headers = {'Content-Type': 'application/json'};
 
@@ -737,12 +765,24 @@
     // ============================================
     // Art-Net Config
     // ============================================
+    function onArtnetModeChange() {
+        const mode = document.getElementById('artnet-mode').value;
+        document.getElementById('artnet-sender-config').style.display = mode === 'sender' ? '' : 'none';
+        document.getElementById('artnet-receiver-config').style.display = mode === 'receiver' ? '' : 'none';
+    }
+
     function saveArtnetConfig() {
+        const mode = document.getElementById('artnet-mode').value;
+        const universe = mode === 'receiver'
+            ? parseInt(document.getElementById('artnet-recv-universe').value) || 0
+            : parseInt(document.getElementById('artnet-universe').value) || 0;
         const ip = document.getElementById('artnet-ip').value.trim() || '255.255.255.255';
+
         const data = {
-            artnet_enabled: document.getElementById('artnet-enabled').checked,
+            artnet_enabled: mode === 'sender',
+            artnet_receiver_enabled: mode === 'receiver',
             artnet_target_ip: ip,
-            artnet_universe: parseInt(document.getElementById('artnet-universe').value) || 0,
+            artnet_universe: universe,
         };
         fetch('/api/config', {method: 'POST', headers, body: JSON.stringify(data)})
             .then(r => r.json().then(d => ({ok: r.ok, data: d})))
@@ -798,8 +838,22 @@
 
                 // Art-Net
                 const artnetEl = document.getElementById('artnet-status');
-                artnetEl.textContent = data.artnet_enabled ? 'ON' : 'OFF';
-                artnetEl.className = 'status-value ' + (data.artnet_enabled ? 'online' : 'offline');
+                const recvInfoEl = document.getElementById('artnet-receiver-info');
+                receiverMode = data.artnet_receiver_enabled;
+                if (data.artnet_receiver_enabled) {
+                    artnetEl.textContent = data.artnet_receiver_active ? 'RECV' : 'ERR';
+                    artnetEl.className = 'status-value ' + (data.artnet_receiver_active ? 'online' : 'offline');
+                    if (data.artnet_receiver_last_seen !== null) {
+                        recvInfoEl.textContent = `${data.artnet_receiver_packets} pkts | ${data.artnet_receiver_last_seen}s ago`;
+                    } else {
+                        recvInfoEl.textContent = 'Waiting for packets...';
+                    }
+                    recvInfoEl.style.display = '';
+                } else {
+                    artnetEl.textContent = data.artnet_enabled ? 'ON' : 'OFF';
+                    artnetEl.className = 'status-value ' + (data.artnet_enabled ? 'online' : 'offline');
+                    recvInfoEl.style.display = 'none';
+                }
 
                 // Scene
                 currentScene = data.current_scene;
@@ -849,15 +903,30 @@
                     document.getElementById('trigger-duration').value = data.trigger_duration;
                 }
 
-                // Art-Net config
-                if (data.artnet_enabled !== undefined) {
-                    document.getElementById('artnet-enabled').checked = data.artnet_enabled;
+                // Art-Net config — update mode selector
+                if (data.artnet_receiver_enabled) {
+                    document.getElementById('artnet-mode').value = 'receiver';
+                } else if (data.artnet_enabled) {
+                    document.getElementById('artnet-mode').value = 'sender';
+                } else {
+                    document.getElementById('artnet-mode').value = 'disabled';
                 }
+                onArtnetModeChange();
                 if (data.artnet_target_ip) {
                     document.getElementById('artnet-ip').value = data.artnet_target_ip;
                 }
                 if (data.artnet_universe !== undefined) {
                     document.getElementById('artnet-universe').value = data.artnet_universe;
+                    document.getElementById('artnet-recv-universe').value = data.artnet_universe;
+                }
+                // Receiver stats
+                if (data.artnet_receiver_packets !== undefined) {
+                    const recvPkts = document.getElementById('recv-packets');
+                    if (recvPkts) recvPkts.textContent = data.artnet_receiver_packets;
+                }
+                if (data.artnet_receiver_last_seen !== undefined) {
+                    const recvLast = document.getElementById('recv-last-seen');
+                    if (recvLast) recvLast.textContent = data.artnet_receiver_last_seen !== null ? data.artnet_receiver_last_seen + 's' : '--';
                 }
 
                 // Highlight active scene button using data attribute
@@ -902,9 +971,20 @@
                 if (data.trigger_scene) document.getElementById('trigger-scene-select').value = data.trigger_scene;
                 if (data.idle_scene) document.getElementById('idle-scene-select').value = data.idle_scene;
                 if (data.trigger_duration) document.getElementById('trigger-duration').value = data.trigger_duration;
-                if (data.artnet_enabled !== undefined) document.getElementById('artnet-enabled').checked = data.artnet_enabled;
+                if (data.artnet_receiver_enabled) {
+                    document.getElementById('artnet-mode').value = 'receiver';
+                    receiverMode = true;
+                } else if (data.artnet_enabled) {
+                    document.getElementById('artnet-mode').value = 'sender';
+                } else {
+                    document.getElementById('artnet-mode').value = 'disabled';
+                }
+                onArtnetModeChange();
                 if (data.artnet_target_ip) document.getElementById('artnet-ip').value = data.artnet_target_ip;
-                if (data.artnet_universe !== undefined) document.getElementById('artnet-universe').value = data.artnet_universe;
+                if (data.artnet_universe !== undefined) {
+                    document.getElementById('artnet-universe').value = data.artnet_universe;
+                    document.getElementById('artnet-recv-universe').value = data.artnet_universe;
+                }
                 if (data.contact_pin) document.getElementById('contact-pin').textContent = data.contact_pin;
                 if (data.safety_switch_pin) document.getElementById('safety-pin').textContent = data.safety_switch_pin;
                 renderChannels();
