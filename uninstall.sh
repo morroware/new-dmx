@@ -35,7 +35,7 @@ fi
 
 echo ""
 echo "========================================"
-echo "  DMX Controller Uninstaller"
+echo "  DMX Controller Uninstaller (General Purpose)"
 echo "========================================"
 echo ""
 warn "This will remove the DMX controller service and application files."

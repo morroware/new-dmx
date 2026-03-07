@@ -3,14 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>DMX Controller - DJPOWER H-IP20V Fog Machine</title>
+    <title>DMX Controller</title>
     <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-        
+        * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
             font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
             background: #0a0a0f;
@@ -18,52 +13,28 @@
             padding: 20px;
             color: #e4e4e7;
         }
-        
-        .container {
-            max-width: 1200px;
-            margin: 0 auto;
-        }
-        
+        .container { max-width: 1400px; margin: 0 auto; }
         .card {
             background: linear-gradient(145deg, #16161d 0%, #1a1a24 100%);
             border: 1px solid #2a2a3a;
             border-radius: 12px;
             padding: 25px;
             margin-bottom: 20px;
-            box-shadow: 0 4px 24px rgba(0,0,0,0.4), 
-                        inset 0 1px 0 rgba(255,255,255,0.03);
+            box-shadow: 0 4px 24px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.03);
         }
-        
-        h1 {
-            color: #f4f4f5;
-            margin-bottom: 10px;
-            font-size: 28px;
-            font-weight: 600;
-            letter-spacing: -0.5px;
-        }
-        
-        h2 {
-            color: #a1a1aa;
-            margin-bottom: 15px;
-            font-size: 16px;
-            font-weight: 500;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-        }
-        
+        h1 { color: #f4f4f5; margin-bottom: 10px; font-size: 28px; font-weight: 600; letter-spacing: -0.5px; }
+        h2 { color: #a1a1aa; margin-bottom: 15px; font-size: 16px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.5px; }
         .grid-2 {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
             gap: 20px;
         }
-        
         .status-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+            grid-template-columns: repeat(auto-fit, minmax(100px, 1fr));
             gap: 12px;
             margin-bottom: 15px;
         }
-        
         .status-item {
             background: #0f0f14;
             border: 1px solid #2a2a3a;
@@ -71,861 +42,787 @@
             border-radius: 8px;
             text-align: center;
         }
-        
         .status-label {
-            font-size: 10px;
-            color: #71717a;
-            margin-bottom: 6px;
-            text-transform: uppercase;
-            letter-spacing: 1px;
-            font-weight: 600;
+            font-size: 10px; color: #71717a; margin-bottom: 6px;
+            text-transform: uppercase; letter-spacing: 1px; font-weight: 600;
         }
-        
         .status-value {
-            font-size: 18px;
-            font-weight: 700;
-            color: #e4e4e7;
+            font-size: 18px; font-weight: 700; color: #e4e4e7;
             font-family: 'SF Mono', 'Consolas', monospace;
         }
-        
-        .status-value.online { 
-            color: #22c55e;
-            text-shadow: 0 0 12px rgba(34, 197, 94, 0.4);
-        }
-        .status-value.offline { 
-            color: #ef4444;
-            text-shadow: 0 0 12px rgba(239, 68, 68, 0.4);
-        }
-        
+        .status-value.online { color: #22c55e; text-shadow: 0 0 12px rgba(34, 197, 94, 0.4); }
+        .status-value.offline { color: #ef4444; text-shadow: 0 0 12px rgba(239, 68, 68, 0.4); }
         .button-group {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-            gap: 12px;
-            margin-bottom: 15px;
+            display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 15px;
         }
-        
         button {
-            padding: 14px 18px;
-            font-size: 13px;
-            font-weight: 600;
-            border: none;
-            border-radius: 8px;
-            cursor: pointer;
-            transition: all 0.2s ease;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
+            padding: 12px 18px; font-size: 13px; font-weight: 600; border: none;
+            border-radius: 8px; cursor: pointer; transition: all 0.2s ease;
+            text-transform: uppercase; letter-spacing: 0.5px;
         }
-        
-        button:hover {
-            transform: translateY(-2px);
-        }
-        
-        button:active {
-            transform: translateY(0);
-        }
-        
-        .btn-primary { 
-            background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
-            color: white;
-            box-shadow: 0 4px 14px rgba(59, 130, 246, 0.35);
-        }
-        .btn-primary:hover { 
-            background: linear-gradient(135deg, #60a5fa 0%, #3b82f6 100%);
-            box-shadow: 0 6px 20px rgba(59, 130, 246, 0.45);
-        }
-        
-        .btn-success { 
-            background: linear-gradient(135deg, #22c55e 0%, #16a34a 100%);
-            color: white;
-            box-shadow: 0 4px 14px rgba(34, 197, 94, 0.35);
-        }
-        .btn-success:hover { 
-            background: linear-gradient(135deg, #4ade80 0%, #22c55e 100%);
-            box-shadow: 0 6px 20px rgba(34, 197, 94, 0.45);
-        }
-        
-        .btn-danger { 
-            background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
-            color: white;
-            box-shadow: 0 4px 14px rgba(239, 68, 68, 0.35);
-        }
-        .btn-danger:hover { 
-            background: linear-gradient(135deg, #f87171 0%, #ef4444 100%);
-            box-shadow: 0 6px 20px rgba(239, 68, 68, 0.45);
-        }
-        
-        .btn-secondary { 
-            background: linear-gradient(135deg, #3f3f46 0%, #27272a 100%);
-            color: #e4e4e7;
-            border: 1px solid #52525b;
-        }
-        .btn-secondary:hover { 
-            background: linear-gradient(135deg, #52525b 0%, #3f3f46 100%);
-            border-color: #71717a;
-        }
-        
-        .form-group {
-            margin-bottom: 16px;
-        }
-        
+        button:hover { transform: translateY(-1px); }
+        button:active { transform: translateY(0); }
+        button:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
+        .btn-primary { background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%); color: white; box-shadow: 0 4px 14px rgba(59, 130, 246, 0.35); }
+        .btn-primary:hover { background: linear-gradient(135deg, #60a5fa 0%, #3b82f6 100%); }
+        .btn-success { background: linear-gradient(135deg, #22c55e 0%, #16a34a 100%); color: white; box-shadow: 0 4px 14px rgba(34, 197, 94, 0.35); }
+        .btn-success:hover { background: linear-gradient(135deg, #4ade80 0%, #22c55e 100%); }
+        .btn-danger { background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%); color: white; box-shadow: 0 4px 14px rgba(239, 68, 68, 0.35); }
+        .btn-danger:hover { background: linear-gradient(135deg, #f87171 0%, #ef4444 100%); }
+        .btn-secondary { background: linear-gradient(135deg, #3f3f46 0%, #27272a 100%); color: #e4e4e7; border: 1px solid #52525b; }
+        .btn-secondary:hover { background: linear-gradient(135deg, #52525b 0%, #3f3f46 100%); border-color: #71717a; }
+        .btn-sm { padding: 8px 14px; font-size: 11px; }
+        .btn-xs { padding: 5px 10px; font-size: 10px; }
+        .form-group { margin-bottom: 16px; }
         label {
-            display: block;
-            font-weight: 500;
-            margin-bottom: 8px;
-            color: #a1a1aa;
-            font-size: 12px;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
+            display: block; font-weight: 500; margin-bottom: 8px; color: #a1a1aa;
+            font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px;
         }
-        
         input[type="range"] {
-            width: 100%;
-            height: 6px;
-            border-radius: 3px;
-            background: #27272a;
-            outline: none;
-            -webkit-appearance: none;
+            width: 100%; height: 6px; border-radius: 3px;
+            background: #27272a; outline: none; -webkit-appearance: none;
         }
-        
         input[type="range"]::-webkit-slider-thumb {
-            -webkit-appearance: none;
-            width: 20px;
-            height: 20px;
-            border-radius: 50%;
+            -webkit-appearance: none; width: 20px; height: 20px; border-radius: 50%;
             background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
-            cursor: pointer;
-            box-shadow: 0 2px 8px rgba(59, 130, 246, 0.5);
-            transition: all 0.2s;
+            cursor: pointer; box-shadow: 0 2px 8px rgba(59, 130, 246, 0.5);
         }
-        
-        input[type="range"]::-webkit-slider-thumb:hover {
-            transform: scale(1.1);
-            box-shadow: 0 4px 12px rgba(59, 130, 246, 0.6);
-        }
-        
         input[type="range"]::-moz-range-thumb {
-            width: 20px;
-            height: 20px;
-            border-radius: 50%;
+            width: 20px; height: 20px; border-radius: 50%;
             background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
-            cursor: pointer;
-            border: none;
-            box-shadow: 0 2px 8px rgba(59, 130, 246, 0.5);
+            cursor: pointer; border: none;
         }
-        
-        input[type="number"] {
-            width: 100%;
-            padding: 12px 14px;
-            border: 1px solid #3f3f46;
-            border-radius: 8px;
-            font-size: 14px;
-            background: #0f0f14;
-            color: #e4e4e7;
+        input[type="text"], input[type="number"] {
+            width: 100%; padding: 10px 12px; border: 1px solid #3f3f46;
+            border-radius: 8px; font-size: 14px; background: #0f0f14; color: #e4e4e7;
             transition: all 0.2s;
         }
-        
-        input[type="number"]:focus {
-            outline: none;
-            border-color: #3b82f6;
-            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.2);
+        input[type="text"]:focus, input[type="number"]:focus {
+            outline: none; border-color: #3b82f6; box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.2);
         }
-        
-        .value-display {
-            display: inline-block;
-            min-width: 45px;
-            text-align: right;
-            font-weight: 700;
-            color: #3b82f6;
-            font-family: 'SF Mono', 'Consolas', monospace;
-        }
-        
-        .info-text {
-            background: rgba(59, 130, 246, 0.1);
-            border-left: 3px solid #3b82f6;
-            padding: 14px 16px;
-            border-radius: 0 8px 8px 0;
-            margin-top: 15px;
-            color: #93c5fd;
-            font-size: 13px;
-        }
-        
-        .info-text strong {
-            color: #60a5fa;
-        }
-        
-        .subtitle {
-            color: #71717a;
-            font-size: 14px;
-            margin-top: 5px;
-        }
-        
         select {
-            width: 100%;
-            padding: 12px 14px;
-            border: 1px solid #3f3f46;
-            border-radius: 8px;
-            font-size: 14px;
-            background: #0f0f14;
-            color: #e4e4e7;
-            cursor: pointer;
-            transition: all 0.2s;
-            -webkit-appearance: none;
-            -moz-appearance: none;
-            appearance: none;
+            width: 100%; padding: 10px 12px; border: 1px solid #3f3f46;
+            border-radius: 8px; font-size: 14px; background: #0f0f14; color: #e4e4e7;
+            cursor: pointer; -webkit-appearance: none; -moz-appearance: none; appearance: none;
             background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%2371717a' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
-            background-repeat: no-repeat;
-            background-position: right 14px center;
-            padding-right: 40px;
+            background-repeat: no-repeat; background-position: right 14px center; padding-right: 40px;
         }
-        
-        select:focus {
-            outline: none;
-            border-color: #3b82f6;
-            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.2);
+        select:focus { outline: none; border-color: #3b82f6; box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.2); }
+        select option { background: #1a1a24; color: #e4e4e7; }
+        .value-display {
+            display: inline-block; min-width: 40px; text-align: right;
+            font-weight: 700; color: #3b82f6; font-family: 'SF Mono', 'Consolas', monospace;
         }
-        
-        select option {
-            background: #1a1a24;
-            color: #e4e4e7;
-            padding: 10px;
+        .channel-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+            gap: 12px;
         }
-        
-        /* Toast notification */
-        .toast {
-            position: fixed;
-            bottom: 20px;
-            right: 20px;
-            background: linear-gradient(135deg, #22c55e 0%, #16a34a 100%);
-            color: white;
-            padding: 16px 28px;
-            border-radius: 10px;
-            box-shadow: 0 8px 24px rgba(0,0,0,0.4);
-            z-index: 1000;
-            animation: slideIn 0.3s ease;
-            font-weight: 600;
-            font-size: 14px;
-        }
-        
-        .toast.error {
-            background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
-        }
-        
-        @keyframes slideIn {
-            from {
-                transform: translateX(400px);
-                opacity: 0;
-            }
-            to {
-                transform: translateX(0);
-                opacity: 1;
-            }
-        }
-        
-        @keyframes slideOut {
-            from {
-                transform: translateX(0);
-                opacity: 1;
-            }
-            to {
-                transform: translateX(400px);
-                opacity: 0;
-            }
-        }
-        
-        .tabs {
-            display: flex;
-            gap: 5px;
-            margin-bottom: 20px;
-            border-bottom: 1px solid #2a2a3a;
-            padding-bottom: 0;
-        }
-        
-        .tab {
-            padding: 12px 24px;
-            cursor: pointer;
-            border: none;
-            background: none;
-            color: #71717a;
-            font-weight: 600;
-            font-size: 13px;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-            border-bottom: 2px solid transparent;
-            margin-bottom: -1px;
-            transition: all 0.2s;
-        }
-        
-        .tab:hover {
-            color: #a1a1aa;
-            transform: none;
-            box-shadow: none;
-        }
-        
-        .tab.active {
-            color: #3b82f6;
-            border-bottom-color: #3b82f6;
-        }
-        
-        .tab-content {
-            display: none;
-        }
-        
-        .tab-content.active {
-            display: block;
-        }
-        
-        /* Accent glow effects */
-        .card:hover {
-            border-color: #3f3f46;
-        }
-        
-        /* Scrollbar styling */
-        ::-webkit-scrollbar {
-            width: 8px;
-            height: 8px;
-        }
-        
-        ::-webkit-scrollbar-track {
+        .channel-item {
             background: #0f0f14;
+            border: 1px solid #2a2a3a;
+            border-radius: 8px;
+            padding: 12px 16px;
         }
-        
-        ::-webkit-scrollbar-thumb {
-            background: #3f3f46;
-            border-radius: 4px;
+        .channel-header {
+            display: flex; justify-content: space-between; align-items: center;
+            margin-bottom: 8px;
         }
-        
-        ::-webkit-scrollbar-thumb:hover {
-            background: #52525b;
+        .channel-label {
+            font-size: 12px; color: #a1a1aa; font-weight: 600;
+            text-transform: uppercase; letter-spacing: 0.5px;
+            cursor: pointer; border-bottom: 1px dashed transparent;
         }
-        
-        /* Header accent line */
-        .card:first-child {
-            border-top: 3px solid #3b82f6;
+        .channel-label:hover { color: #3b82f6; border-bottom-color: #3b82f6; }
+        .channel-value {
+            font-size: 16px; font-weight: 700; color: #3b82f6;
+            font-family: 'SF Mono', 'Consolas', monospace; min-width: 35px; text-align: right;
         }
+        .scene-list { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 15px; }
+        .scene-btn {
+            padding: 10px 16px; font-size: 12px; font-weight: 600; border: 1px solid #3f3f46;
+            border-radius: 8px; cursor: pointer; background: #1a1a24; color: #e4e4e7;
+            transition: all 0.2s; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+        }
+        .scene-btn:hover { border-color: #3b82f6; background: #1e1e2a; transform: translateY(-1px); }
+        .scene-btn.active { border-color: #3b82f6; background: rgba(59, 130, 246, 0.15); color: #60a5fa; }
+        .subtitle { color: #71717a; font-size: 14px; margin-top: 5px; }
+        .toast {
+            position: fixed; bottom: 20px; right: 20px;
+            background: linear-gradient(135deg, #22c55e 0%, #16a34a 100%);
+            color: white; padding: 14px 24px; border-radius: 10px;
+            box-shadow: 0 8px 24px rgba(0,0,0,0.4); z-index: 1000;
+            animation: slideIn 0.3s ease; font-weight: 600; font-size: 13px;
+        }
+        .toast.error { background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%); }
+        @keyframes slideIn { from { transform: translateX(400px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+        @keyframes slideOut { from { transform: translateX(0); opacity: 1; } to { transform: translateX(400px); opacity: 0; } }
+        .tabs { display: flex; gap: 5px; margin-bottom: 20px; border-bottom: 1px solid #2a2a3a; }
+        .tab {
+            padding: 12px 24px; cursor: pointer; border: none; background: none;
+            color: #71717a; font-weight: 600; font-size: 13px; text-transform: uppercase;
+            letter-spacing: 0.5px; border-bottom: 2px solid transparent; margin-bottom: -1px; transition: all 0.2s;
+        }
+        .tab:hover { color: #a1a1aa; transform: none; box-shadow: none; }
+        .tab.active { color: #3b82f6; border-bottom-color: #3b82f6; }
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
+        .inline-form { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+        .inline-form input, .inline-form select { width: auto; flex: 1; min-width: 120px; }
+        .info-text {
+            background: rgba(59, 130, 246, 0.1); border-left: 3px solid #3b82f6;
+            padding: 12px 14px; border-radius: 0 8px 8px 0; margin-top: 12px;
+            color: #93c5fd; font-size: 13px;
+        }
+        .info-text strong { color: #60a5fa; }
+        .card:first-child { border-top: 3px solid #3b82f6; }
+        .modal-overlay {
+            display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.7); z-index: 900; align-items: center; justify-content: center;
+        }
+        .modal-overlay.active { display: flex; }
+        .modal {
+            background: #1a1a24; border: 1px solid #3f3f46; border-radius: 12px;
+            padding: 30px; max-width: 500px; width: 90%; max-height: 80vh; overflow-y: auto;
+        }
+        .modal h2 { margin-bottom: 20px; }
+        ::-webkit-scrollbar { width: 8px; height: 8px; }
+        ::-webkit-scrollbar-track { background: #0f0f14; }
+        ::-webkit-scrollbar-thumb { background: #3f3f46; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #52525b; }
     </style>
 </head>
 <body>
     <div class="container">
         <!-- Header -->
         <div class="card">
-            <h1>🎭 DMX Controller - H-IP20V</h1>
-            <p class="subtitle">DJPOWER H-IP20V Fog Machine - 16 Channel Control</p>
-            
+            <h1>DMX Controller</h1>
+            <p class="subtitle">General-Purpose DMX512 Testing &amp; Control</p>
             <div class="status-grid" style="margin-top: 15px;">
                 <div class="status-item">
                     <div class="status-label">ENTTEC</div>
-                    <div class="status-value" id="enttec-status">—</div>
+                    <div class="status-value" id="enttec-status">--</div>
                 </div>
                 <div class="status-item">
                     <div class="status-label">DMX</div>
-                    <div class="status-value" id="dmx-status">—</div>
+                    <div class="status-value" id="dmx-status">--</div>
+                </div>
+                <div class="status-item">
+                    <div class="status-label">Art-Net</div>
+                    <div class="status-value" id="artnet-status">--</div>
                 </div>
                 <div class="status-item">
                     <div class="status-label">Scene</div>
-                    <div class="status-value" id="current-scene">—</div>
+                    <div class="status-value" id="current-scene">--</div>
                 </div>
                 <div class="status-item">
-                    <div class="status-label">Contact</div>
-                    <div class="status-value" id="contact-state">—</div>
-                </div>
-                <div class="status-item">
-                    <div class="status-label">Safety SW</div>
-                    <div class="status-value" id="safety-switch-state">—</div>
+                    <div class="status-label">GPIO</div>
+                    <div class="status-value" id="gpio-status">--</div>
                 </div>
             </div>
         </div>
-        
-        <div class="grid-2">
-            <!-- Quick Controls -->
-            <div class="card">
-                <h2>⚡ Quick Controls</h2>
-                
-                <div class="button-group">
-                    <button id="trigger-button" class="btn-success" onclick="trigger()">
-                        🔔 Trigger
-                    </button>
-                    <button class="btn-danger" onclick="applyScene('scene_a')">
-                        ⚫ ALL OFF (A)
-                    </button>
-                    <button class="btn-primary" onclick="applyScene('scene_b')">
-                        🌫 FOG ON (B)
-                    </button>
-                    <button class="btn-secondary" onclick="applyScene('scene_c')">
-                        🔵 Custom 1 (C)
-                    </button>
-                    <button class="btn-secondary" onclick="applyScene('scene_d')">
-                        🔴 Custom 2 (D)
-                    </button>
-                </div>
-                <button class="btn-danger" onclick="blackout()" style="width: 100%; margin-bottom: 15px;">
-                    🚨 EMERGENCY BLACKOUT
-                </button>
-                
-                <div class="form-group">
-                    <label for="trigger-duration">Trigger Duration (seconds)</label>
-                    <input type="number" id="trigger-duration" min="1" max="300" step="0.5" value="10.0">
-                </div>
-                <button class="btn-primary" onclick="updateDuration()" style="width: 100%;">
-                    Save Duration
-                </button>
+
+        <!-- Tabs -->
+        <div class="card" style="padding-bottom: 0; margin-bottom: 0; border-bottom-left-radius: 0; border-bottom-right-radius: 0;">
+            <div class="tabs" style="margin-bottom: 0;">
+                <button class="tab active" onclick="showMainTab('channels-tab', this)">Channels</button>
+                <button class="tab" onclick="showMainTab('scenes-tab', this)">Scenes</button>
+                <button class="tab" onclick="showMainTab('settings-tab', this)">Settings</button>
             </div>
-            
-            <!-- Live Controls -->
-            <div class="card">
-                <h2>🎚 Live Control</h2>
+        </div>
 
-                <div class="form-group">
-                    <label>Fog Output <span class="value-display" id="fog-value">0</span></label>
-                    <input type="range" id="fog" min="0" max="255" value="0" oninput="updateChannel(1, this.value)">
+        <!-- Channels Tab -->
+        <div id="channels-tab" class="tab-content active">
+            <div class="card" style="border-top-left-radius: 0; border-top-right-radius: 0; border-top: none;">
+                <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 20px;">
+                    <h2 style="margin-bottom: 0;">DMX Channels</h2>
+                    <div style="display: flex; gap: 8px; align-items: center;">
+                        <button class="btn-danger btn-sm" onclick="blackout()">BLACKOUT</button>
+                        <button class="btn-success btn-sm" id="trigger-btn" onclick="trigger()">TRIGGER</button>
+                    </div>
                 </div>
-
-                <div class="form-group">
-                    <label>Dimmer (LED) <span class="value-display" id="dimmer-value">0</span></label>
-                    <input type="range" id="dimmer" min="0" max="255" value="0" oninput="updateChannel(15, this.value)">
+                <div id="channel-grid" class="channel-grid">
+                    <!-- Channels rendered dynamically -->
                 </div>
-
-                <div class="form-group">
-                    <label>Strobe <span class="value-display" id="strobe-value">0</span></label>
-                    <input type="range" id="strobe" min="0" max="255" value="0" oninput="updateChannel(14, this.value)">
-                </div>
-
-                <div class="form-group">
-                    <label>Safety Channel <span class="value-display" id="safety-value">100</span></label>
-                    <select id="safety" onchange="updateChannel(16, this.value)">
-                        <option value="50">Minimum (50)</option>
-                        <option value="100" selected>Default (100)</option>
-                        <option value="200">Maximum (200)</option>
-                    </select>
+                <div style="margin-top: 15px; display: flex; gap: 10px; align-items: center;">
+                    <button class="btn-secondary btn-sm" onclick="addChannels()">+ Add Channels</button>
+                    <button class="btn-secondary btn-sm" onclick="removeChannels()">- Remove Channels</button>
+                    <span style="color: #71717a; font-size: 12px;" id="channel-count-label"></span>
                 </div>
             </div>
         </div>
-        
-        <!-- Advanced Controls -->
-        <div class="card">
-            <h2>🎨 LED Controls</h2>
 
-            <div class="tabs">
-                <button class="tab active" onclick="showTab('outer-leds', this)">Outer LEDs</button>
-                <button class="tab" onclick="showTab('inner-leds', this)">Inner LEDs</button>
-                <button class="tab" onclick="showTab('led-effects', this)">LED Effects</button>
-            </div>
-
-            <!-- Outer LEDs Tab -->
-            <div id="outer-leds" class="tab-content active">
-                <div class="grid-2">
-                    <div class="form-group">
-                        <label>Outer Red <span class="value-display" id="outer-red-value">0</span></label>
-                        <input type="range" id="outer-red" min="0" max="255" value="0" oninput="updateChannel(3, this.value)">
-                    </div>
-
-                    <div class="form-group">
-                        <label>Outer Green <span class="value-display" id="outer-green-value">0</span></label>
-                        <input type="range" id="outer-green" min="0" max="255" value="0" oninput="updateChannel(4, this.value)">
-                    </div>
-
-                    <div class="form-group">
-                        <label>Outer Blue <span class="value-display" id="outer-blue-value">0</span></label>
-                        <input type="range" id="outer-blue" min="0" max="255" value="0" oninput="updateChannel(5, this.value)">
-                    </div>
-
-                    <div class="form-group">
-                        <label>Outer Amber <span class="value-display" id="outer-amber-value">0</span></label>
-                        <input type="range" id="outer-amber" min="0" max="255" value="0" oninput="updateChannel(6, this.value)">
-                    </div>
+        <!-- Scenes Tab -->
+        <div id="scenes-tab" class="tab-content">
+            <div class="card" style="border-top-left-radius: 0; border-top-right-radius: 0; border-top: none;">
+                <h2>Saved Scenes</h2>
+                <div id="scene-list" class="scene-list">
+                    <!-- Scene buttons rendered dynamically -->
                 </div>
-            </div>
 
-            <!-- Inner LEDs Tab -->
-            <div id="inner-leds" class="tab-content">
-                <div class="grid-2">
-                    <div class="form-group">
-                        <label>Inner Red <span class="value-display" id="inner-red-value">0</span></label>
-                        <input type="range" id="inner-red" min="0" max="255" value="0" oninput="updateChannel(7, this.value)">
-                    </div>
-
-                    <div class="form-group">
-                        <label>Inner Green <span class="value-display" id="inner-green-value">0</span></label>
-                        <input type="range" id="inner-green" min="0" max="255" value="0" oninput="updateChannel(8, this.value)">
-                    </div>
-
-                    <div class="form-group">
-                        <label>Inner Blue <span class="value-display" id="inner-blue-value">0</span></label>
-                        <input type="range" id="inner-blue" min="0" max="255" value="0" oninput="updateChannel(9, this.value)">
-                    </div>
-
-                    <div class="form-group">
-                        <label>Inner Amber <span class="value-display" id="inner-amber-value">0</span></label>
-                        <input type="range" id="inner-amber" min="0" max="255" value="0" oninput="updateChannel(10, this.value)">
-                    </div>
-                </div>
-            </div>
-
-            <!-- LED Effects Tab -->
-            <div id="led-effects" class="tab-content">
-                <div class="grid-2">
-                    <div class="form-group">
-                        <label>LED Mix Color 1 <span class="value-display" id="led-mix1-value">0</span></label>
-                        <input type="range" id="led-mix1" min="0" max="255" value="0" oninput="updateChannel(11, this.value)">
-                    </div>
-
-                    <div class="form-group">
-                        <label>LED Mix Color 2 <span class="value-display" id="led-mix2-value">0</span></label>
-                        <input type="range" id="led-mix2" min="0" max="255" value="0" oninput="updateChannel(12, this.value)">
-                    </div>
-
-                    <div class="form-group">
-                        <label>LED Auto Color <span class="value-display" id="auto-color-value">0</span></label>
-                        <input type="range" id="auto-color" min="0" max="255" value="0" oninput="updateChannel(13, this.value)">
+                <div style="margin-top: 20px; padding-top: 20px; border-top: 1px solid #2a2a3a;">
+                    <h2>Save Current State as Scene</h2>
+                    <div class="inline-form">
+                        <input type="text" id="new-scene-name" placeholder="Scene name..." style="min-width: 200px;">
+                        <button class="btn-primary btn-sm" onclick="saveScene()">Save Scene</button>
                     </div>
                 </div>
 
-                <div class="info-text">
-                    <strong>Note:</strong> LED lighting time will automatically turn off after 25 seconds. To re-light, set Dimmer to 0 then back to 255.
+                <div style="margin-top: 20px; padding-top: 20px; border-top: 1px solid #2a2a3a;">
+                    <h2>Trigger Configuration</h2>
+                    <div class="grid-2">
+                        <div class="form-group">
+                            <label>Trigger Scene</label>
+                            <select id="trigger-scene-select" onchange="updateTriggerConfig()">
+                                <option value="">-- None --</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>Idle Scene (after trigger)</label>
+                            <select id="idle-scene-select" onchange="updateTriggerConfig()">
+                                <option value="">-- Blackout --</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>Trigger Duration (seconds)</label>
+                            <input type="number" id="trigger-duration" min="0.5" max="300" step="0.5" value="10">
+                        </div>
+                        <div class="form-group" style="display: flex; align-items: flex-end;">
+                            <button class="btn-primary btn-sm" onclick="saveTriggerConfig()">Save Trigger Config</button>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
-        
-        <!-- Scene Editor -->
-        <div class="card">
-            <h2>💾 Scene Editor</h2>
-            
-            <div class="form-group">
-                <label>Edit Scene</label>
-                <select id="scene-select">
-                    <option value="scene_a">Scene A (OFF)</option>
-                    <option value="scene_b">Scene B (ON)</option>
-                    <option value="scene_c">Scene C (Custom 1)</option>
-                    <option value="scene_d">Scene D (Custom 2)</option>
-                </select>
-            </div>
-            
-            <button class="btn-primary" onclick="saveCurrentAsScene()">
-                💾 Save Current Settings to Scene
-            </button>
-            
-            <div class="info-text">
-                <strong>Tip:</strong> Adjust the controls above to your desired settings, then save them to a scene for quick recall.
+
+        <!-- Settings Tab -->
+        <div id="settings-tab" class="tab-content">
+            <div class="card" style="border-top-left-radius: 0; border-top-right-radius: 0; border-top: none;">
+                <h2>Art-Net Output</h2>
+                <div class="grid-2">
+                    <div class="form-group">
+                        <label>
+                            <input type="checkbox" id="artnet-enabled" style="width: auto; margin-right: 8px;"
+                                   onchange="saveArtnetConfig()">
+                            Enable Art-Net Output
+                        </label>
+                    </div>
+                    <div></div>
+                    <div class="form-group">
+                        <label>Target IP</label>
+                        <input type="text" id="artnet-ip" placeholder="255.255.255.255" value="255.255.255.255">
+                    </div>
+                    <div class="form-group">
+                        <label>Universe</label>
+                        <input type="number" id="artnet-universe" min="0" max="32767" value="0">
+                    </div>
+                </div>
+                <button class="btn-primary btn-sm" onclick="saveArtnetConfig()">Save Art-Net Settings</button>
+
+                <div style="margin-top: 25px; padding-top: 20px; border-top: 1px solid #2a2a3a;">
+                    <h2>Channel Labels</h2>
+                    <p style="color: #71717a; font-size: 13px; margin-bottom: 12px;">
+                        Click any channel label in the Channels tab to rename it. Labels are saved automatically.
+                    </p>
+                </div>
+
+                <div style="margin-top: 25px; padding-top: 20px; border-top: 1px solid #2a2a3a;">
+                    <h2>GPIO</h2>
+                    <div class="grid-2">
+                        <div class="status-item">
+                            <div class="status-label">Contact Pin</div>
+                            <div class="status-value" id="contact-pin">--</div>
+                        </div>
+                        <div class="status-item">
+                            <div class="status-label">Safety Pin</div>
+                            <div class="status-value" id="safety-pin">--</div>
+                        </div>
+                        <div class="status-item">
+                            <div class="status-label">Contact State</div>
+                            <div class="status-value" id="contact-state">--</div>
+                        </div>
+                        <div class="status-item">
+                            <div class="status-label">Safety State</div>
+                            <div class="status-value" id="safety-state">--</div>
+                        </div>
+                    </div>
+                </div>
             </div>
         </div>
     </div>
-    
+
+    <!-- Label Edit Modal -->
+    <div class="modal-overlay" id="label-modal">
+        <div class="modal">
+            <h2>Rename Channel <span id="label-modal-ch"></span></h2>
+            <div class="form-group">
+                <label>Label</label>
+                <input type="text" id="label-modal-input" placeholder="e.g. Dimmer, Red, Strobe...">
+            </div>
+            <div style="display: flex; gap: 10px; justify-content: flex-end;">
+                <button class="btn-secondary btn-sm" onclick="closeLabelModal()">Cancel</button>
+                <button class="btn-primary btn-sm" onclick="saveLabelModal()">Save</button>
+            </div>
+        </div>
+    </div>
+
     <script>
-        // Update status every 2 seconds
-        const statusInterval = setInterval(updateStatus, 2000);
-        updateStatus();
-        
-        let currentChannels = {};
-        let activeSlider = null;  // Track slider being dragged to prevent polling overwrite
-        let lastChannelError = 0;
-        let lastStatusError = 0;
-        let statusErrorCount = 0;
-        function getApiHeaders() {
-            return {'Content-Type': 'application/json'};
-        }
+    // ============================================
+    // State
+    // ============================================
+    let visibleChannels = 16;
+    let channelLabels = {};
+    let scenes = {};
+    let currentScene = null;
+    let activeSlider = null;
+    let lastStatusError = 0;
 
-        // Toast notification function
-        function showToast(message, isError = false) {
-            const toast = document.createElement('div');
-            toast.className = 'toast' + (isError ? ' error' : '');
-            toast.textContent = message;
-            document.body.appendChild(toast);
-            
-            setTimeout(() => {
-                toast.style.animation = 'slideOut 0.3s ease';
-                setTimeout(() => toast.remove(), 300);
-            }, 2000);
-        }
-        
-        function updateStatus() {
-            fetch('/api/status', {headers: getApiHeaders()})
-                .then(response => {
-                    if (!response.ok) {
-                        throw new Error('Status request failed');
-                    }
-                    return response.json();
-                })
-                .then(data => {
-                    statusErrorCount = 0;
-                    document.getElementById('enttec-status').textContent = data.enttec_connected ? 'OK' : 'ERR';
-                    document.getElementById('enttec-status').className = 'status-value ' + (data.enttec_connected ? 'online' : 'offline');
-                    
-                    document.getElementById('dmx-status').textContent = data.dmx_running ? 'ON' : 'OFF';
-                    document.getElementById('dmx-status').className = 'status-value ' + (data.dmx_running ? 'online' : 'offline');
-                    
-                    const sceneName = {'scene_a': 'A', 'scene_b': 'B', 'scene_c': 'C', 'scene_d': 'D'}[data.current_scene] || '—';
-                    document.getElementById('current-scene').textContent = sceneName;
-                    
-                    const contactText = {'open': 'OPEN', 'closed': 'CLOSED'}[data.contact_state] || '—';
-                    document.getElementById('contact-state').textContent = contactText;
+    const headers = {'Content-Type': 'application/json'};
 
-                    const safetyText = {'on': 'SAFE', 'off': 'LOCK'}[data.safety_switch_state] || '—';
-                    const safetyEl = document.getElementById('safety-switch-state');
-                    safetyEl.textContent = safetyText;
-                    safetyEl.className = 'status-value ' + (data.safe_to_operate ? 'online' : 'offline');
+    // ============================================
+    // Toast
+    // ============================================
+    function showToast(message, isError = false) {
+        const toast = document.createElement('div');
+        toast.className = 'toast' + (isError ? ' error' : '');
+        toast.textContent = message;
+        document.body.appendChild(toast);
+        setTimeout(() => {
+            toast.style.animation = 'slideOut 0.3s ease';
+            setTimeout(() => toast.remove(), 300);
+        }, 2000);
+    }
 
-                    const triggerBtn = document.getElementById('trigger-button');
-                    triggerBtn.disabled = !data.safe_to_operate;
-                    triggerBtn.style.opacity = data.safe_to_operate ? '1' : '0.5';
-                    triggerBtn.title = data.safe_to_operate ? '' : 'Safety switch is OFF';
-                    
-                    // Update current channels
-                    if (data.channels) {
-                        currentChannels = data.channels;
-                        updateSliderDisplays();
-                    }
-                    
-                    // Update trigger duration display
-                    if (data.scene_b_duration) {
-                        document.getElementById('trigger-duration').value = data.scene_b_duration;
-                    }
-                })
-                .catch(error => {
-                    console.error('Status poll error:', error);
-                    statusErrorCount++;
-                    const now = Date.now();
-                    // Only show toast once every 10 seconds to avoid spam
-                    if (now - lastStatusError > 10000) {
-                        showToast('Connection lost - retrying...', true);
-                        lastStatusError = now;
-                    }
-                });
-        }
-        
-        function updateSliderDisplays() {
-            const sliderMap = {
-                'fog': ['fog-value', 'fog'],
-                'dimmer': ['dimmer-value', 'dimmer'],
-                'strobe': ['strobe-value', 'strobe'],
-                'outer_red': ['outer-red-value', 'outer-red'],
-                'outer_green': ['outer-green-value', 'outer-green'],
-                'outer_blue': ['outer-blue-value', 'outer-blue'],
-                'outer_amber': ['outer-amber-value', 'outer-amber'],
-                'inner_red': ['inner-red-value', 'inner-red'],
-                'inner_green': ['inner-green-value', 'inner-green'],
-                'inner_blue': ['inner-blue-value', 'inner-blue'],
-                'inner_amber': ['inner-amber-value', 'inner-amber'],
-                'led_mix1': ['led-mix1-value', 'led-mix1'],
-                'led_mix2': ['led-mix2-value', 'led-mix2'],
-                'auto_color': ['auto-color-value', 'auto-color'],
-            };
-            for (const [key, [valueId, sliderId]] of Object.entries(sliderMap)) {
-                if (currentChannels[key] !== undefined) {
-                    // Don't overwrite a slider the user is actively dragging
-                    if (sliderId === activeSlider) continue;
-                    document.getElementById(valueId).textContent = currentChannels[key];
-                    document.getElementById(sliderId).value = currentChannels[key];
-                }
-            }
-            if (currentChannels.safety !== undefined) {
-                document.getElementById('safety-value').textContent = currentChannels.safety;
-                // Sync the select element to the closest matching option
-                const safetySelect = document.getElementById('safety');
-                const safetyVal = currentChannels.safety;
-                const options = Array.from(safetySelect.options).map(o => parseInt(o.value));
-                let closest = options[0];
-                for (const opt of options) {
-                    if (Math.abs(opt - safetyVal) < Math.abs(closest - safetyVal)) {
-                        closest = opt;
-                    }
-                }
-                safetySelect.value = closest;
-            }
-        }
-        
-        function updateChannel(channel, value) {
-            // Update display
-            const displays = {
-                1: 'fog-value',
-                3: 'outer-red-value',
-                4: 'outer-green-value',
-                5: 'outer-blue-value',
-                6: 'outer-amber-value',
-                7: 'inner-red-value',
-                8: 'inner-green-value',
-                9: 'inner-blue-value',
-                10: 'inner-amber-value',
-                11: 'led-mix1-value',
-                12: 'led-mix2-value',
-                13: 'auto-color-value',
-                14: 'strobe-value',
-                15: 'dimmer-value',
-                16: 'safety-value',
-            };
-            
-            if (displays[channel]) {
-                document.getElementById(displays[channel]).textContent = value;
-            }
-            
-            // Send to server
-            fetch('/api/channel', {
-                method: 'POST',
-                headers: getApiHeaders(),
-                body: JSON.stringify({channel: channel, value: value})
-            })
-            .then(response => {
-                if (!response.ok) {
-                    throw new Error('Channel update failed');
-                }
-            })
-            .catch(error => {
-                console.error('Error:', error);
-                const now = Date.now();
-                if (now - lastChannelError > 2000) {
-                    showToast('❌ Error updating channel', true);
-                    lastChannelError = now;
-                }
-            });
-        }
-        
-        function trigger() {
-            fetch('/api/trigger', {method: 'POST', headers: getApiHeaders()})
-                .then(response => response.json().then(data => ({ok: response.ok, data})))
-                .then(({ok, data}) => {
-                    if (!ok) {
-                        throw new Error(data.error || 'Trigger failed');
-                    }
-                    if (data.success) {
-                        showToast('✅ Trigger activated!');
-                        updateStatus();
-                    }
-                })
-                .catch(error => {
-                    console.error('Error:', error);
-                    showToast(`❌ ${error.message || 'Error triggering'}`, true);
-                });
-        }
-        
-        const sceneNames = {
-            'scene_a': 'All OFF (A)',
-            'scene_b': 'Fog ON (B)',
-            'scene_c': 'Custom 1 (C)',
-            'scene_d': 'Custom 2 (D)',
-        };
+    // ============================================
+    // Channel Rendering
+    // ============================================
+    function renderChannels() {
+        const grid = document.getElementById('channel-grid');
+        const existingCount = grid.children.length;
 
-        function applyScene(sceneName) {
-            fetch(`/api/scene/${sceneName}`, {method: 'POST', headers: getApiHeaders()})
-                .then(response => response.json().then(data => ({ok: response.ok, data})))
-                .then(({ok, data}) => {
-                    if (!ok) {
-                        throw new Error(data.error || 'Scene apply failed');
-                    }
-                    if (data.success) {
-                        showToast('Scene: ' + (sceneNames[sceneName] || sceneName));
-                        updateStatus();
-                    }
-                })
-                .catch(error => {
-                    console.error('Error:', error);
-                    showToast(`❌ ${error.message || 'Error applying scene'}`, true);
-                });
-        }
+        if (existingCount === visibleChannels) return; // Already correct
 
-        function blackout() {
-            fetch('/api/blackout', {method: 'POST', headers: getApiHeaders()})
-                .then(response => response.json().then(data => ({ok: response.ok, data})))
-                .then(({ok, data}) => {
-                    if (!ok) {
-                        throw new Error('Blackout failed');
-                    }
-                    if (data.success) {
-                        showToast('🚨 BLACKOUT - All channels zeroed');
-                        updateStatus();
-                    }
-                })
-                .catch(error => {
-                    console.error('Error:', error);
-                    showToast('❌ Error during blackout', true);
-                });
+        grid.innerHTML = '';
+        for (let ch = 1; ch <= visibleChannels; ch++) {
+            const label = channelLabels[ch] || `Channel ${ch}`;
+            const item = document.createElement('div');
+            item.className = 'channel-item';
+            item.id = `ch-item-${ch}`;
+            item.innerHTML = `
+                <div class="channel-header">
+                    <span class="channel-label" id="ch-label-${ch}" onclick="openLabelModal(${ch})" title="Click to rename">${label}</span>
+                    <span class="channel-value" id="ch-val-${ch}">0</span>
+                </div>
+                <input type="range" id="ch-slider-${ch}" min="0" max="255" value="0"
+                       oninput="onSliderInput(${ch}, this.value)"
+                       onmousedown="activeSlider=${ch}" ontouchstart="activeSlider=${ch}">
+            `;
+            grid.appendChild(item);
         }
-        
-        function updateDuration() {
-            const duration = parseFloat(document.getElementById('trigger-duration').value);
-            
-            fetch('/api/config', {
-                method: 'POST',
-                headers: getApiHeaders(),
-                body: JSON.stringify({scene_b_duration: duration})
-            })
-            .then(response => response.json().then(data => ({ok: response.ok, data})))
-            .then(({ok, data}) => {
-                if (ok && data.success) {
-                    showToast(`✅ Duration: ${duration}s`);
-                } else {
-                    throw new Error('Duration update failed');
-                }
-            })
-            .catch(error => {
-                console.error('Error:', error);
-                showToast('❌ Error updating config', true);
-            });
-        }
-        
-        function saveCurrentAsScene() {
-            const sceneKey = document.getElementById('scene-select').value;
-            
-            // Get current channel values
-            const channels = {
-                1: parseInt(document.getElementById('fog').value),
-                2: 0,  // Disabled channel
-                3: parseInt(document.getElementById('outer-red').value),
-                4: parseInt(document.getElementById('outer-green').value),
-                5: parseInt(document.getElementById('outer-blue').value),
-                6: parseInt(document.getElementById('outer-amber').value),
-                7: parseInt(document.getElementById('inner-red').value),
-                8: parseInt(document.getElementById('inner-green').value),
-                9: parseInt(document.getElementById('inner-blue').value),
-                10: parseInt(document.getElementById('inner-amber').value),
-                11: parseInt(document.getElementById('led-mix1').value),
-                12: parseInt(document.getElementById('led-mix2').value),
-                13: parseInt(document.getElementById('auto-color').value),
-                14: parseInt(document.getElementById('strobe').value),
-                15: parseInt(document.getElementById('dimmer').value),
-                16: parseInt(document.getElementById('safety').value),
-            };
-            
-            const data = {};
-            data[sceneKey] = channels;
-            
-            fetch('/api/config', {
-                method: 'POST',
-                headers: getApiHeaders(),
-                body: JSON.stringify(data)
-            })
-            .then(response => response.json().then(data => ({ok: response.ok, data})))
-            .then(({ok, data}) => {
-                if (ok && data.success) {
-                    showToast('✅ Scene saved!');
-                } else {
-                    throw new Error('Scene save failed');
-                }
-            })
-            .catch(error => {
-                console.error('Error:', error);
-                showToast('❌ Error saving scene', true);
-            });
-        }
-        
-        // Prevent polling from overwriting sliders while user is dragging
-        document.querySelectorAll('input[type="range"]').forEach(slider => {
-            slider.addEventListener('mousedown', () => { activeSlider = slider.id; });
-            slider.addEventListener('touchstart', () => { activeSlider = slider.id; });
-        });
+        document.getElementById('channel-count-label').textContent = `${visibleChannels} channels`;
+
+        // Re-attach mouseup/touchend
         document.addEventListener('mouseup', () => { activeSlider = null; });
         document.addEventListener('touchend', () => { activeSlider = null; });
+    }
 
-        function showTab(tabName, btn) {
-            // Hide all tab contents
-            document.querySelectorAll('.tab-content').forEach(tc => {
-                tc.classList.remove('active');
-            });
-            document.querySelectorAll('.tab').forEach(tb => {
-                tb.classList.remove('active');
-            });
-
-            // Show selected tab
-            document.getElementById(tabName).classList.add('active');
-            btn.classList.add('active');
+    function updateChannelDisplays(channels) {
+        for (const [ch, val] of Object.entries(channels)) {
+            const chNum = parseInt(ch);
+            const valEl = document.getElementById(`ch-val-${chNum}`);
+            const sliderEl = document.getElementById(`ch-slider-${chNum}`);
+            if (valEl) valEl.textContent = val;
+            if (sliderEl && activeSlider !== chNum) sliderEl.value = val;
         }
+    }
+
+    function updateLabelDisplays() {
+        for (let ch = 1; ch <= visibleChannels; ch++) {
+            const el = document.getElementById(`ch-label-${ch}`);
+            if (el) el.textContent = channelLabels[ch] || `Channel ${ch}`;
+        }
+    }
+
+    function onSliderInput(channel, value) {
+        const valEl = document.getElementById(`ch-val-${channel}`);
+        if (valEl) valEl.textContent = value;
+        fetch('/api/channel', {
+            method: 'POST', headers,
+            body: JSON.stringify({channel, value: parseInt(value)})
+        }).catch(err => console.error('Channel update error:', err));
+    }
+
+    function addChannels() {
+        const newCount = Math.min(512, visibleChannels + 8);
+        if (newCount === visibleChannels) return;
+        visibleChannels = newCount;
+        renderChannels();
+        fetch('/api/config', {
+            method: 'POST', headers,
+            body: JSON.stringify({visible_channels: visibleChannels})
+        }).catch(console.error);
+    }
+
+    function removeChannels() {
+        const newCount = Math.max(1, visibleChannels - 8);
+        if (newCount === visibleChannels) return;
+        visibleChannels = newCount;
+        renderChannels();
+        fetch('/api/config', {
+            method: 'POST', headers,
+            body: JSON.stringify({visible_channels: visibleChannels})
+        }).catch(console.error);
+    }
+
+    // ============================================
+    // Label Modal
+    // ============================================
+    let labelModalCh = null;
+    function openLabelModal(ch) {
+        labelModalCh = ch;
+        document.getElementById('label-modal-ch').textContent = ch;
+        document.getElementById('label-modal-input').value = channelLabels[ch] || '';
+        document.getElementById('label-modal').classList.add('active');
+        document.getElementById('label-modal-input').focus();
+    }
+    function closeLabelModal() {
+        document.getElementById('label-modal').classList.remove('active');
+        labelModalCh = null;
+    }
+    function saveLabelModal() {
+        if (labelModalCh === null) return;
+        const val = document.getElementById('label-modal-input').value.trim();
+        const data = {};
+        data[labelModalCh] = val;
+        if (val) {
+            channelLabels[labelModalCh] = val;
+        } else {
+            delete channelLabels[labelModalCh];
+        }
+        updateLabelDisplays();
+        closeLabelModal();
+        fetch('/api/channel-labels', {
+            method: 'POST', headers, body: JSON.stringify(data)
+        }).then(r => { if (r.ok) showToast('Label saved'); })
+          .catch(console.error);
+    }
+    // Enter key in label modal
+    document.addEventListener('keydown', e => {
+        if (e.key === 'Enter' && labelModalCh !== null) saveLabelModal();
+        if (e.key === 'Escape' && labelModalCh !== null) closeLabelModal();
+    });
+
+    // ============================================
+    // Scenes
+    // ============================================
+    function renderScenes() {
+        const list = document.getElementById('scene-list');
+        list.innerHTML = '';
+
+        const ids = Object.keys(scenes).sort();
+        if (ids.length === 0) {
+            list.innerHTML = '<span style="color: #71717a; font-size: 13px;">No scenes saved yet.</span>';
+            return;
+        }
+
+        for (const sid of ids) {
+            const scene = scenes[sid];
+            const btn = document.createElement('button');
+            btn.className = 'scene-btn' + (currentScene === sid ? ' active' : '');
+            btn.textContent = scene.name || sid;
+            btn.title = `Click to apply. Right-click to delete.`;
+            btn.onclick = () => applyScene(sid);
+            btn.oncontextmenu = (e) => { e.preventDefault(); deleteScene(sid, scene.name); };
+            list.appendChild(btn);
+        }
+
+        // Update trigger/idle scene selects
+        updateSceneSelects();
+    }
+
+    function updateSceneSelects() {
+        const triggerSel = document.getElementById('trigger-scene-select');
+        const idleSel = document.getElementById('idle-scene-select');
+        const currentTrigger = triggerSel.value;
+        const currentIdle = idleSel.value;
+
+        triggerSel.innerHTML = '<option value="">-- None --</option>';
+        idleSel.innerHTML = '<option value="">-- Blackout --</option>';
+
+        for (const [sid, scene] of Object.entries(scenes)) {
+            triggerSel.innerHTML += `<option value="${sid}">${scene.name || sid}</option>`;
+            idleSel.innerHTML += `<option value="${sid}">${scene.name || sid}</option>`;
+        }
+
+        triggerSel.value = currentTrigger;
+        idleSel.value = currentIdle;
+    }
+
+    function applyScene(sceneId) {
+        fetch(`/api/scene/${encodeURIComponent(sceneId)}`, {method: 'POST', headers})
+            .then(r => r.json().then(d => ({ok: r.ok, data: d})))
+            .then(({ok, data}) => {
+                if (!ok) throw new Error(data.error || 'Failed');
+                showToast(`Scene: ${scenes[sceneId]?.name || sceneId}`);
+                updateStatus();
+            })
+            .catch(err => showToast(err.message, true));
+    }
+
+    function saveScene() {
+        const nameInput = document.getElementById('new-scene-name');
+        const name = nameInput.value.trim();
+        if (!name) { showToast('Enter a scene name', true); return; }
+
+        const id = name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
+        if (!id) { showToast('Invalid scene name', true); return; }
+
+        // Gather current channel values from sliders
+        const channels = {};
+        for (let ch = 1; ch <= visibleChannels; ch++) {
+            const slider = document.getElementById(`ch-slider-${ch}`);
+            if (slider) channels[ch] = parseInt(slider.value);
+        }
+
+        fetch('/api/scenes', {
+            method: 'POST', headers,
+            body: JSON.stringify({id, name, channels})
+        })
+        .then(r => r.json().then(d => ({ok: r.ok, data: d})))
+        .then(({ok, data}) => {
+            if (!ok) throw new Error(data.error || 'Save failed');
+            showToast(`Scene "${name}" saved`);
+            nameInput.value = '';
+            scenes[id] = {name, channels};
+            renderScenes();
+        })
+        .catch(err => showToast(err.message, true));
+    }
+
+    function deleteScene(sceneId, sceneName) {
+        if (!confirm(`Delete scene "${sceneName || sceneId}"?`)) return;
+        fetch(`/api/scenes/${encodeURIComponent(sceneId)}`, {method: 'DELETE', headers})
+            .then(r => r.json().then(d => ({ok: r.ok, data: d})))
+            .then(({ok, data}) => {
+                if (!ok) throw new Error(data.error || 'Delete failed');
+                showToast(`Deleted "${sceneName || sceneId}"`);
+                delete scenes[sceneId];
+                renderScenes();
+            })
+            .catch(err => showToast(err.message, true));
+    }
+
+    // ============================================
+    // Trigger Config
+    // ============================================
+    function updateTriggerConfig() { /* Just tracks UI state, save on button click */ }
+
+    function saveTriggerConfig() {
+        const data = {
+            trigger_scene: document.getElementById('trigger-scene-select').value || null,
+            idle_scene: document.getElementById('idle-scene-select').value || null,
+            trigger_duration: parseFloat(document.getElementById('trigger-duration').value) || 10,
+        };
+        fetch('/api/config', {method: 'POST', headers, body: JSON.stringify(data)})
+            .then(r => r.json().then(d => ({ok: r.ok, data: d})))
+            .then(({ok}) => {
+                if (ok) showToast('Trigger config saved');
+                else throw new Error('Save failed');
+            })
+            .catch(err => showToast(err.message, true));
+    }
+
+    // ============================================
+    // Art-Net Config
+    // ============================================
+    function saveArtnetConfig() {
+        const data = {
+            artnet_enabled: document.getElementById('artnet-enabled').checked,
+            artnet_target_ip: document.getElementById('artnet-ip').value.trim() || '255.255.255.255',
+            artnet_universe: parseInt(document.getElementById('artnet-universe').value) || 0,
+        };
+        fetch('/api/config', {method: 'POST', headers, body: JSON.stringify(data)})
+            .then(r => r.json().then(d => ({ok: r.ok, data: d})))
+            .then(({ok}) => {
+                if (ok) showToast('Art-Net settings saved');
+                else throw new Error('Save failed');
+            })
+            .catch(err => showToast(err.message, true));
+    }
+
+    // ============================================
+    // Quick Controls
+    // ============================================
+    function blackout() {
+        fetch('/api/blackout', {method: 'POST', headers})
+            .then(r => r.json().then(d => ({ok: r.ok, data: d})))
+            .then(({ok}) => {
+                if (ok) { showToast('BLACKOUT'); updateStatus(); }
+                else throw new Error('Blackout failed');
+            })
+            .catch(err => showToast(err.message, true));
+    }
+
+    function trigger() {
+        fetch('/api/trigger', {method: 'POST', headers})
+            .then(r => r.json().then(d => ({ok: r.ok, data: d})))
+            .then(({ok, data}) => {
+                if (!ok) throw new Error(data.error || 'Trigger failed');
+                showToast('Trigger activated');
+                updateStatus();
+            })
+            .catch(err => showToast(err.message, true));
+    }
+
+    // ============================================
+    // Status Polling
+    // ============================================
+    function updateStatus() {
+        fetch('/api/status', {headers})
+            .then(r => { if (!r.ok) throw new Error('Status failed'); return r.json(); })
+            .then(data => {
+                // ENTTEC
+                const enttecEl = document.getElementById('enttec-status');
+                enttecEl.textContent = data.enttec_connected ? 'OK' : 'OFF';
+                enttecEl.className = 'status-value ' + (data.enttec_connected ? 'online' : 'offline');
+
+                // DMX thread
+                const dmxEl = document.getElementById('dmx-status');
+                dmxEl.textContent = data.dmx_running ? 'ON' : 'OFF';
+                dmxEl.className = 'status-value ' + (data.dmx_running ? 'online' : 'offline');
+
+                // Art-Net
+                const artnetEl = document.getElementById('artnet-status');
+                artnetEl.textContent = data.artnet_enabled ? 'ON' : 'OFF';
+                artnetEl.className = 'status-value ' + (data.artnet_enabled ? 'online' : 'offline');
+
+                // Scene
+                currentScene = data.current_scene;
+                const sceneEl = document.getElementById('current-scene');
+                if (currentScene && scenes[currentScene]) {
+                    sceneEl.textContent = scenes[currentScene].name || currentScene;
+                } else {
+                    sceneEl.textContent = currentScene || '--';
+                }
+
+                // GPIO
+                const gpioEl = document.getElementById('gpio-status');
+                gpioEl.textContent = data.gpio_ready ? 'OK' : (data.gpio_available ? 'ERR' : 'N/A');
+                gpioEl.className = 'status-value ' + (data.gpio_ready ? 'online' : 'offline');
+
+                // Contact / Safety (settings tab)
+                const contactEl = document.getElementById('contact-state');
+                if (contactEl) {
+                    contactEl.textContent = {open: 'OPEN', closed: 'CLOSED'}[data.contact_state] || '--';
+                }
+                const safetyEl = document.getElementById('safety-state');
+                if (safetyEl) {
+                    safetyEl.textContent = {on: 'SAFE', off: 'LOCK'}[data.safety_switch_state] || '--';
+                    safetyEl.className = 'status-value ' + (data.safe_to_operate ? 'online' : 'offline');
+                }
+
+                // Channel count may have changed
+                if (data.visible_channels && data.visible_channels !== visibleChannels) {
+                    visibleChannels = data.visible_channels;
+                    renderChannels();
+                }
+
+                // Channel labels
+                if (data.channel_labels) {
+                    let changed = false;
+                    for (const [k, v] of Object.entries(data.channel_labels)) {
+                        if (channelLabels[k] !== v) { channelLabels[k] = v; changed = true; }
+                    }
+                    if (changed) updateLabelDisplays();
+                }
+
+                // Channel values
+                if (data.channels) updateChannelDisplays(data.channels);
+
+                // Trigger config
+                if (data.trigger_duration !== undefined) {
+                    document.getElementById('trigger-duration').value = data.trigger_duration;
+                }
+
+                // Art-Net config
+                if (data.artnet_enabled !== undefined) {
+                    document.getElementById('artnet-enabled').checked = data.artnet_enabled;
+                }
+                if (data.artnet_target_ip) {
+                    document.getElementById('artnet-ip').value = data.artnet_target_ip;
+                }
+                if (data.artnet_universe !== undefined) {
+                    document.getElementById('artnet-universe').value = data.artnet_universe;
+                }
+
+                // Highlight active scene button
+                document.querySelectorAll('.scene-btn').forEach(btn => btn.classList.remove('active'));
+                if (currentScene) {
+                    // find matching button
+                    document.querySelectorAll('.scene-btn').forEach(btn => {
+                        if (btn.onclick && btn.onclick.toString().includes(currentScene)) {
+                            btn.classList.add('active');
+                        }
+                    });
+                }
+            })
+            .catch(err => {
+                const now = Date.now();
+                if (now - lastStatusError > 10000) {
+                    showToast('Connection lost - retrying...', true);
+                    lastStatusError = now;
+                }
+            });
+    }
+
+    // ============================================
+    // Tab Switching
+    // ============================================
+    function showMainTab(tabId, btn) {
+        document.querySelectorAll('.tab-content').forEach(tc => tc.classList.remove('active'));
+        document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+        document.getElementById(tabId).classList.add('active');
+        btn.classList.add('active');
+    }
+
+    // ============================================
+    // Initial Load
+    // ============================================
+    function initialLoad() {
+        // Fetch scenes first, then status
+        fetch('/api/scenes', {headers})
+            .then(r => r.json())
+            .then(data => {
+                scenes = data;
+                renderScenes();
+            })
+            .catch(console.error);
+
+        fetch('/api/config', {headers})
+            .then(r => r.json())
+            .then(data => {
+                if (data.visible_channels) visibleChannels = data.visible_channels;
+                if (data.channel_labels) channelLabels = data.channel_labels;
+                if (data.trigger_scene) document.getElementById('trigger-scene-select').value = data.trigger_scene;
+                if (data.idle_scene) document.getElementById('idle-scene-select').value = data.idle_scene;
+                if (data.trigger_duration) document.getElementById('trigger-duration').value = data.trigger_duration;
+                if (data.artnet_enabled !== undefined) document.getElementById('artnet-enabled').checked = data.artnet_enabled;
+                if (data.artnet_target_ip) document.getElementById('artnet-ip').value = data.artnet_target_ip;
+                if (data.artnet_universe !== undefined) document.getElementById('artnet-universe').value = data.artnet_universe;
+                if (data.contact_pin) document.getElementById('contact-pin').textContent = data.contact_pin;
+                if (data.safety_switch_pin) document.getElementById('safety-pin').textContent = data.safety_switch_pin;
+                renderChannels();
+                updateStatus();
+            })
+            .catch(err => {
+                console.error('Config load error:', err);
+                renderChannels();
+                updateStatus();
+            });
+    }
+
+    initialLoad();
+    setInterval(updateStatus, 2000);
     </script>
 </body>
 </html>

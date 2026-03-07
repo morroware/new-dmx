@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
-DMX Controller for DJPOWER H-IP20V Fog Machine
-16-channel mode with LED control and GPIO trigger
+General-Purpose DMX512 Controller
+Supports ENTTEC Open DMX USB and Art-Net output.
+Configurable channels, unlimited named scenes, and web UI.
 """
 
 from flask import Flask, jsonify, request, send_file
@@ -12,6 +13,8 @@ import sys
 import glob
 import atexit
 import signal
+import socket
+import struct
 import tempfile
 from threading import Lock, Timer, Thread
 
@@ -30,7 +33,6 @@ GPIO_LIB = None
 gpiod = None
 lgpio = None
 
-# Import ALL available GPIO libraries so init_gpio() can fall back between them.
 if importlib.util.find_spec("gpiod"):
     try:
         gpiod = importlib.import_module("gpiod")
@@ -54,7 +56,7 @@ else:
 
 app = Flask(__name__)
 
-# Path for persisting scene config across restarts
+# Path for persisting config across restarts
 CONFIG_DIR = os.environ.get("DMX_CONFIG_DIR", "/var/lib/dmx")
 CONFIG_FILE = os.environ.get(
     "DMX_CONFIG_FILE",
@@ -71,124 +73,39 @@ class Config:
     # GPIO Settings
     CONTACT_PIN = 17
     SAFETY_SWITCH_PIN = 27
-    GPIO_CHIP = None  # Optional override: int index or string like "gpiochip0" or "/dev/gpiochip0"
+    GPIO_CHIP = None
 
     # DMX Settings
     DMX_CHANNELS = 512
     DMX_REFRESH_RATE = 44
     FTDI_URL = os.environ.get("DMX_FTDI_URL", "ftdi://0403:6001/1")
 
-    # Timing
-    SCENE_B_DURATION = 10.0  # seconds
+    # How many channels to show in the UI by default
+    VISIBLE_CHANNELS = 16
 
-    # GPIO debounce - ignore transitions within this window
+    # Art-Net settings
+    ARTNET_ENABLED = os.environ.get("DMX_ARTNET_ENABLED", "false").lower() in ("1", "true", "yes")
+    ARTNET_TARGET_IP = os.environ.get("DMX_ARTNET_TARGET_IP", "255.255.255.255")
+    ARTNET_PORT = 6454
+    ARTNET_UNIVERSE = int(os.environ.get("DMX_ARTNET_UNIVERSE", "0"))
+    ARTNET_SUBNET = 0
+    ARTNET_NET = 0
+
+    # Trigger timing
+    TRIGGER_DURATION = 10.0  # seconds
+    TRIGGER_SCENE = None  # scene id to apply on trigger (None = disabled)
+    IDLE_SCENE = None  # scene id to return to after trigger (None = blackout)
+
+    # GPIO debounce
     DEBOUNCE_TIME = 0.3  # seconds
 
-    # DJPOWER H-IP20V Fog Machine (16-channel mode)
-    # Full channel map:
-    # Ch1: Fog (0-9 Off, 10-255 On)
-    # Ch2: Disabled
-    # Ch3: Outer LED Red (0-9 Off, 10-255 Dim to bright)
-    # Ch4: Outer LED Green (0-9 Off, 10-255 Dim to bright)
-    # Ch5: Outer LED Blue (0-9 Off, 10-255 Dim to bright)
-    # Ch6: Outer LED Amber (0-9 Off, 10-255 Dim to bright)
-    # Ch7: Inner LED Red (0-9 Off, 10-255 Dim to bright)
-    # Ch8: Inner LED Green (0-9 Off, 10-255 Dim to bright)
-    # Ch9: Inner LED Blue (0-9 Off, 10-255 Dim to bright)
-    # Ch10: Inner LED Amber (0-9 Off, 10-255 Dim to bright)
-    # Ch11: LED Mix Color 1 (0-9 Off, 10-255 Mix color)
-    # Ch12: LED Mix Color 2 (0-9 Off, 10-255 Mix color)
-    # Ch13: LED Auto Color (0-9 Off, 10-255 Slow to fast)
-    # Ch14: Strobe (0-9 Off, 10-255 Slow to fast)
-    # Ch15: Dimmer (0-9 Off, 10-255 Dim to bright)
-    # Ch16: Safety Channel (0-49 Invalid, 50-200 Valid, 201-255 Invalid)
+    # Channel labels — user-customizable names for each channel number.
+    # Any channel not listed here is shown as "Channel N".
+    CHANNEL_LABELS = {}
 
-    SCENES = {
-        'scene_a': {
-            'name': 'All OFF (Default)',
-            'channels': {
-                1: 0,     # Fog: Off
-                2: 0,     # Disabled
-                3: 0,     # Outer Red: Off
-                4: 0,     # Outer Green: Off
-                5: 0,     # Outer Blue: Off
-                6: 0,     # Outer Amber: Off
-                7: 0,     # Inner Red: Off
-                8: 0,     # Inner Green: Off
-                9: 0,     # Inner Blue: Off
-                10: 0,    # Inner Amber: Off
-                11: 0,    # LED Mix 1: Off
-                12: 0,    # LED Mix 2: Off
-                13: 0,    # Auto Color: Off
-                14: 0,    # Strobe: Off
-                15: 0,    # Dimmer: Off
-                16: 100,  # Safety: Valid
-            }
-        },
-        'scene_b': {
-            'name': 'Fog ON (Triggered)',
-            'channels': {
-                1: 255,   # Fog: Full
-                2: 0,     # Disabled
-                3: 255,   # Outer Red: Full
-                4: 255,   # Outer Green: Full
-                5: 255,   # Outer Blue: Full
-                6: 0,     # Outer Amber: Off
-                7: 255,   # Inner Red: Full
-                8: 255,   # Inner Green: Full
-                9: 255,   # Inner Blue: Full
-                10: 0,    # Inner Amber: Off
-                11: 0,    # LED Mix 1: Off
-                12: 0,    # LED Mix 2: Off
-                13: 0,    # Auto Color: Off
-                14: 0,    # Strobe: Off
-                15: 255,  # Dimmer: Full
-                16: 100,  # Safety: Valid
-            }
-        },
-        'scene_c': {
-            'name': 'Custom Scene 1',
-            'channels': {
-                1: 255,   # Fog: Full
-                2: 0,     # Disabled
-                3: 0,     # Outer Red: Off
-                4: 0,     # Outer Green: Off
-                5: 255,   # Outer Blue: Full
-                6: 0,     # Outer Amber: Off
-                7: 0,     # Inner Red: Off
-                8: 0,     # Inner Green: Off
-                9: 255,   # Inner Blue: Full
-                10: 0,    # Inner Amber: Off
-                11: 0,    # LED Mix 1: Off
-                12: 0,    # LED Mix 2: Off
-                13: 0,    # Auto Color: Off
-                14: 50,   # Strobe: Slow
-                15: 200,  # Dimmer: 80%
-                16: 100,  # Safety: Valid
-            }
-        },
-        'scene_d': {
-            'name': 'Custom Scene 2',
-            'channels': {
-                1: 200,   # Fog: High
-                2: 0,     # Disabled
-                3: 255,   # Outer Red: Full
-                4: 0,     # Outer Green: Off
-                5: 0,     # Outer Blue: Off
-                6: 200,   # Outer Amber: High
-                7: 255,   # Inner Red: Full
-                8: 0,     # Inner Green: Off
-                9: 0,     # Inner Blue: Off
-                10: 200,  # Inner Amber: High
-                11: 0,    # LED Mix 1: Off
-                12: 0,    # LED Mix 2: Off
-                13: 100,  # Auto Color: Medium
-                14: 0,    # Strobe: Off
-                15: 255,  # Dimmer: Full
-                16: 100,  # Safety: Valid
-            }
-        }
-    }
+    # Scenes — unlimited named scenes stored as {id: {name, channels}}
+    SCENES = {}
+
 
 config = Config()
 
@@ -197,20 +114,26 @@ config = Config()
 # ============================================
 
 def save_config():
-    """Save current scene config and duration to disk (atomic write)"""
+    """Save current config to disk (atomic write)"""
     try:
         config_dir = os.path.dirname(CONFIG_FILE)
         os.makedirs(config_dir, exist_ok=True)
         data = {
-            'scene_b_duration': config.SCENE_B_DURATION,
+            'visible_channels': config.VISIBLE_CHANNELS,
+            'trigger_duration': config.TRIGGER_DURATION,
+            'trigger_scene': config.TRIGGER_SCENE,
+            'idle_scene': config.IDLE_SCENE,
+            'channel_labels': {str(k): v for k, v in config.CHANNEL_LABELS.items()},
+            'artnet_enabled': config.ARTNET_ENABLED,
+            'artnet_target_ip': config.ARTNET_TARGET_IP,
+            'artnet_universe': config.ARTNET_UNIVERSE,
             'scenes': {}
         }
-        for key, scene in config.SCENES.items():
-            data['scenes'][key] = {
+        for sid, scene in config.SCENES.items():
+            data['scenes'][sid] = {
                 'name': scene['name'],
                 'channels': {str(k): v for k, v in scene['channels'].items()}
             }
-        # Write to temp file then atomically rename to prevent corruption
         fd, tmp_path = tempfile.mkstemp(dir=config_dir, suffix='.tmp')
         try:
             with os.fdopen(fd, 'w') as f:
@@ -227,26 +150,49 @@ def save_config():
 
 
 def load_config():
-    """Load scene config from disk if it exists"""
+    """Load config from disk if it exists"""
     if not os.path.exists(CONFIG_FILE):
         return
     try:
         with open(CONFIG_FILE, 'r') as f:
             data = json.load(f)
-        if 'scene_b_duration' in data:
-            config.SCENE_B_DURATION = float(data['scene_b_duration'])
-        if 'scenes' in data:
-            for key, scene in data['scenes'].items():
-                if key in config.SCENES:
-                    config.SCENES[key]['name'] = scene.get('name', config.SCENES[key]['name'])
-                    raw_channels = scene.get('channels', {})
-                    try:
-                        config.SCENES[key]['channels'] = _normalize_scene_channels(
-                            raw_channels,
-                            base_channels=config.SCENES[key]['channels'],
-                        )
-                    except (TypeError, ValueError) as e:
-                        print(f"WARNING: Invalid channel data in saved {key}; keeping previous values: {e}")
+
+        if 'visible_channels' in data:
+            config.VISIBLE_CHANNELS = max(1, min(512, int(data['visible_channels'])))
+        if 'trigger_duration' in data:
+            config.TRIGGER_DURATION = max(0.5, min(300.0, float(data['trigger_duration'])))
+        if 'trigger_scene' in data:
+            config.TRIGGER_SCENE = data['trigger_scene']
+        if 'idle_scene' in data:
+            config.IDLE_SCENE = data['idle_scene']
+        if 'artnet_enabled' in data:
+            config.ARTNET_ENABLED = bool(data['artnet_enabled'])
+        if 'artnet_target_ip' in data:
+            config.ARTNET_TARGET_IP = str(data['artnet_target_ip'])
+        if 'artnet_universe' in data:
+            config.ARTNET_UNIVERSE = int(data['artnet_universe'])
+
+        if 'channel_labels' in data and isinstance(data['channel_labels'], dict):
+            config.CHANNEL_LABELS = {}
+            for k, v in data['channel_labels'].items():
+                try:
+                    config.CHANNEL_LABELS[int(k)] = str(v)
+                except (TypeError, ValueError):
+                    pass
+
+        if 'scenes' in data and isinstance(data['scenes'], dict):
+            for sid, scene in data['scenes'].items():
+                try:
+                    channels = {}
+                    for ch, val in scene.get('channels', {}).items():
+                        channels[int(ch)] = max(0, min(255, int(val)))
+                    config.SCENES[str(sid)] = {
+                        'name': scene.get('name', sid),
+                        'channels': channels
+                    }
+                except (TypeError, ValueError) as e:
+                    print(f"WARNING: Invalid scene data for {sid}: {e}")
+
         print("Loaded saved configuration from disk")
     except Exception as e:
         print(f"WARNING: Could not load config (using defaults): {e}")
@@ -263,19 +209,81 @@ class SystemState:
         self.dmx_data = bytearray([0] * (config.DMX_CHANNELS + 1))
         self.dmx_lock = Lock()
         self.current_scene = None
-        self.scene_b_timer = None
-        self.timer_lock = Lock()  # Protects scene_b_timer access
+        self.trigger_timer = None
+        self.timer_lock = Lock()
         self.gpio_line = None
         self.gpio_safety_line = None
         self.gpio_chip = None
         self.gpio_chip_id = None
-        self.gpio_ready = False  # Explicit flag for GPIO readiness
+        self.gpio_ready = False
         self.dmx_thread = None
         self.dmx_running = False
         self.enttec_url = None
         self.enttec_last_error = None
+        # Art-Net
+        self.artnet_socket = None
+        self.artnet_sequence = 0
 
 state = SystemState()
+
+# ============================================
+# Art-Net Functions
+# ============================================
+
+ARTNET_HEADER = b'Art-Net\x00'
+ARTNET_OPCODE_DMX = 0x5000
+
+def init_artnet():
+    """Initialize Art-Net UDP socket"""
+    if not config.ARTNET_ENABLED:
+        return False
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        state.artnet_socket = sock
+        print(f"Art-Net initialized: target={config.ARTNET_TARGET_IP}:{config.ARTNET_PORT} universe={config.ARTNET_UNIVERSE}")
+        return True
+    except Exception as e:
+        print(f"WARNING: Could not initialize Art-Net: {e}")
+        state.artnet_socket = None
+        return False
+
+
+def send_artnet_frame():
+    """Send current DMX data as an Art-Net DMX packet"""
+    if state.artnet_socket is None:
+        return
+    try:
+        state.artnet_sequence = (state.artnet_sequence + 1) % 256
+        if state.artnet_sequence == 0:
+            state.artnet_sequence = 1
+
+        # Art-Net DMX packet structure
+        universe = (config.ARTNET_SUBNET << 4) | (config.ARTNET_UNIVERSE & 0x0F)
+        universe_hi = config.ARTNET_NET & 0x7F
+
+        with state.dmx_lock:
+            dmx_payload = bytes(state.dmx_data[1:513])  # channels 1-512
+
+        length = len(dmx_payload)
+
+        packet = bytearray()
+        packet.extend(ARTNET_HEADER)                          # 8 bytes: "Art-Net\0"
+        packet.extend(struct.pack('<H', ARTNET_OPCODE_DMX))   # 2 bytes: opcode (little-endian)
+        packet.extend(struct.pack('>H', 14))                  # 2 bytes: protocol version (big-endian)
+        packet.append(state.artnet_sequence)                  # 1 byte: sequence
+        packet.append(0)                                      # 1 byte: physical port
+        packet.append(universe & 0xFF)                        # 1 byte: universe low
+        packet.append(universe_hi & 0xFF)                     # 1 byte: universe high
+        packet.extend(struct.pack('>H', length))              # 2 bytes: data length (big-endian)
+        packet.extend(dmx_payload)                            # N bytes: DMX data
+
+        state.artnet_socket.sendto(
+            bytes(packet),
+            (config.ARTNET_TARGET_IP, config.ARTNET_PORT)
+        )
+    except Exception as e:
+        print(f"WARNING: Art-Net send error: {e}")
 
 # ============================================
 # ENTTEC DMX Functions
@@ -290,35 +298,25 @@ def init_enttec():
 
     def _candidate_urls(devices):
         urls = []
-
-        # Always try explicitly configured URL first.
         urls.append(config.FTDI_URL)
-
-        # Then try generic FTDI URLs that often work for single-device setups.
         urls.extend([
             "ftdi://::/1",
             "ftdi://::/2",
             "ftdi://0403:6001/1",
             "ftdi://0403:6001/2",
         ])
-
-        # Finally, try serial-targeted URLs from discovered devices.
         for desc, _iface in devices:
             serial = getattr(desc, 'sn', None)
             if serial:
                 urls.append(f"ftdi://::{serial}/1")
                 urls.append(f"ftdi://::{serial}/2")
-
-        # De-dupe while preserving order.
         return list(dict.fromkeys(urls))
 
     try:
         print("Initializing ENTTEC Open DMX USB...")
-
         devices = Ftdi.list_devices()
-
         if not devices:
-            print("ERROR: No FTDI devices found!")
+            print("WARNING: No FTDI devices found (ENTTEC not connected)")
             state.enttec_last_error = "No FTDI devices found"
             return False
 
@@ -385,61 +383,55 @@ def reinit_enttec():
 
 
 def dmx_refresh_thread():
-    """Background thread to continuously send DMX frames.
-
-    Automatically recovers from USB errors by re-initializing the ENTTEC device.
-    """
+    """Background thread to continuously send DMX frames via ENTTEC and/or Art-Net."""
     refresh_interval = 1.0 / config.DMX_REFRESH_RATE
     consecutive_errors = 0
     MAX_ERRORS_BEFORE_REINIT = 3
-    REINIT_BACKOFF = 2.0  # seconds to wait before attempting reinit
+    REINIT_BACKOFF = 2.0
     offline_backoff = 1.0
     offline_backoff_max = 10.0
 
     print(f"DMX refresh thread started ({config.DMX_REFRESH_RATE} Hz)")
 
     while state.dmx_running:
+        enttec_ok = False
         try:
-            if state.ftdi_device is None:
-                raise Exception("FTDI device not available")
-            with state.dmx_lock:
-                # Send BREAK
-                state.ftdi_device.set_break(True)
-                time.sleep(0.000088)
-                state.ftdi_device.set_break(False)
-                time.sleep(0.000008)
-
-                # Send data
-                state.ftdi_device.write_data(state.dmx_data)
-
-            consecutive_errors = 0
-            offline_backoff = 1.0
-            time.sleep(refresh_interval)
-
+            if state.ftdi_device is not None:
+                with state.dmx_lock:
+                    state.ftdi_device.set_break(True)
+                    time.sleep(0.000088)
+                    state.ftdi_device.set_break(False)
+                    time.sleep(0.000008)
+                    state.ftdi_device.write_data(state.dmx_data)
+                enttec_ok = True
+                consecutive_errors = 0
+                offline_backoff = 1.0
         except Exception as e:
             consecutive_errors += 1
-            if "FTDI device not available" in str(e):
-                print(f"WARNING: DMX refresh offline: {e}")
-                time.sleep(offline_backoff)
-                offline_backoff = min(offline_backoff * 2, offline_backoff_max)
-                reinit_enttec()
-                continue
-
             if consecutive_errors <= MAX_ERRORS_BEFORE_REINIT:
                 print(f"WARNING: DMX refresh error ({consecutive_errors}/{MAX_ERRORS_BEFORE_REINIT}): {e}")
                 time.sleep(0.1)
-                continue
-
-            # Too many consecutive errors - attempt to re-initialize
-            print(f"ERROR: {consecutive_errors} consecutive DMX failures. Attempting ENTTEC re-init...")
-            time.sleep(REINIT_BACKOFF)
-
-            if reinit_enttec():
-                print("ENTTEC re-initialized successfully, resuming DMX output")
-                consecutive_errors = 0
             else:
-                print(f"ENTTEC re-init failed. Retrying in {REINIT_BACKOFF}s...")
-                # Keep looping - don't break out. Will retry on next iteration.
+                print(f"ERROR: {consecutive_errors} consecutive DMX failures. Attempting ENTTEC re-init...")
+                time.sleep(REINIT_BACKOFF)
+                if reinit_enttec():
+                    print("ENTTEC re-initialized successfully, resuming DMX output")
+                    consecutive_errors = 0
+                else:
+                    print(f"ENTTEC re-init failed. Retrying in {REINIT_BACKOFF}s...")
+
+        # Always send Art-Net if enabled, regardless of ENTTEC status
+        if config.ARTNET_ENABLED:
+            send_artnet_frame()
+
+        # If no ENTTEC device and it's the only output, back off
+        if state.ftdi_device is None and not config.ARTNET_ENABLED:
+            time.sleep(offline_backoff)
+            offline_backoff = min(offline_backoff * 2, offline_backoff_max)
+            reinit_enttec()
+            continue
+
+        time.sleep(refresh_interval)
 
     print("DMX refresh thread stopped")
 
@@ -467,46 +459,30 @@ def set_channel(channel, value):
             state.dmx_data[int(channel)] = max(0, min(255, int(value)))
 
 
-def apply_scene(scene_name):
+def apply_scene(scene_id):
     """Apply a scene to DMX channels"""
-    if scene_name not in config.SCENES:
-        print(f"ERROR: Scene {scene_name} not found")
+    if scene_id not in config.SCENES:
+        print(f"ERROR: Scene '{scene_id}' not found")
         return False
 
-    scene = config.SCENES[scene_name]
-
-    # Apply scene values atomically
+    scene = config.SCENES[scene_id]
     with state.dmx_lock:
         for channel, value in scene['channels'].items():
             if 1 <= int(channel) <= config.DMX_CHANNELS:
                 state.dmx_data[int(channel)] = max(0, min(255, int(value)))
 
-    state.current_scene = scene_name
+    state.current_scene = scene_id
     print(f"Applied scene: {scene['name']}")
-
     return True
 
 
 def get_current_channels():
-    """Get current DMX channel values"""
+    """Get current DMX channel values as a dict of channel_number: value"""
     with state.dmx_lock:
-        return {
-            'fog': state.dmx_data[1],
-            'outer_red': state.dmx_data[3],
-            'outer_green': state.dmx_data[4],
-            'outer_blue': state.dmx_data[5],
-            'outer_amber': state.dmx_data[6],
-            'inner_red': state.dmx_data[7],
-            'inner_green': state.dmx_data[8],
-            'inner_blue': state.dmx_data[9],
-            'inner_amber': state.dmx_data[10],
-            'led_mix1': state.dmx_data[11],
-            'led_mix2': state.dmx_data[12],
-            'auto_color': state.dmx_data[13],
-            'strobe': state.dmx_data[14],
-            'dimmer': state.dmx_data[15],
-            'safety': state.dmx_data[16],
-        }
+        result = {}
+        for i in range(1, config.VISIBLE_CHANNELS + 1):
+            result[i] = state.dmx_data[i]
+        return result
 
 # ============================================
 # GPIO Functions
@@ -535,7 +511,6 @@ def _gpiochip_candidates():
 
 
 def _chip_id_to_path(chip_id):
-    """Normalize a chip identifier to a /dev/gpiochipN path string."""
     if chip_id is None:
         return "/dev/gpiochip0"
     if isinstance(chip_id, int):
@@ -545,13 +520,11 @@ def _chip_id_to_path(chip_id):
         return f"/dev/gpiochip{chip_id}"
     if chip_id.startswith("gpiochip"):
         return f"/dev/{chip_id}"
-    return chip_id  # Already a full path
+    return chip_id
 
 
 def _open_gpiod_line(chip_id):
     chip_id = _normalize_gpiochip_id(chip_id)
-
-    # gpiod v2 API: request_lines takes a path string, not a Chip object
     if hasattr(gpiod, "request_lines") and hasattr(gpiod, "LineSettings"):
         chip_path = _chip_id_to_path(chip_id)
         direction_enum = getattr(gpiod, "LineDirection", None)
@@ -571,9 +544,8 @@ def _open_gpiod_line(chip_id):
                 config.SAFETY_SWITCH_PIN: line_settings,
             },
         )
-        return None, request  # v2: no separate Chip object needed
+        return None, request
 
-    # gpiod v1 API: create Chip then request the line
     chip = gpiod.Chip(chip_id) if chip_id is not None else None
     try:
         contact_line = chip.get_line(config.CONTACT_PIN)
@@ -618,12 +590,7 @@ def _open_lgpio_line(chip_id):
 
 
 def init_gpio():
-    """Initialize GPIO for contact closure detection.
-
-    Tries the preferred library first (gpiod), then falls back to the other
-    (lgpio) if all chips fail.  This is important for Pi 4 where gpiod may
-    have version/compatibility issues while lgpio works fine.
-    """
+    """Initialize GPIO for contact closure detection."""
     global GPIO_LIB
 
     if not GPIO_AVAILABLE:
@@ -647,8 +614,6 @@ def init_gpio():
         state.gpio_chip = None
         state.gpio_chip_id = None
 
-    # Build ordered list of libraries to attempt.
-    # Preferred library first, then fallback.
     libs_to_try = []
     if GPIO_LIB == 'gpiod':
         libs_to_try.append('gpiod')
@@ -704,14 +669,8 @@ def init_gpio():
 
 
 def _gpio_value_to_int(val):
-    """Normalize a GPIO read value to int 0 or 1.
-
-    gpiod v2 returns a Value enum (not IntEnum) so direct == comparisons
-    against 0/1 would silently fail.  This helper handles both v1 (int)
-    and v2 (enum) return types.
-    """
     if hasattr(val, 'value'):
-        return int(val.value)  # enum -> underlying int
+        return int(val.value)
     return int(val)
 
 
@@ -730,10 +689,8 @@ def _read_gpio_pin(pin):
 
 
 def check_contact_state():
-    """Check current contact closure state. Returns 0 (closed) or 1 (open), or None."""
     if not GPIO_AVAILABLE or not state.gpio_ready:
         return None
-
     try:
         return _read_gpio_pin(config.CONTACT_PIN)
     except Exception as e:
@@ -742,10 +699,8 @@ def check_contact_state():
 
 
 def check_safety_switch_state():
-    """Check safety toggle switch state. 0=ON/safe, 1=OFF/unsafe."""
     if not GPIO_AVAILABLE or not state.gpio_ready:
         return None
-
     try:
         return _read_gpio_pin(config.SAFETY_SWITCH_PIN)
     except Exception as e:
@@ -754,87 +709,63 @@ def check_safety_switch_state():
 
 
 def is_safe_to_operate():
-    """True when safety switch allows machine operation."""
     safety_state = check_safety_switch_state()
+    if safety_state is None:
+        return True  # No safety switch = always safe
     return safety_state == 0
 
 
 def trigger_sequence():
-    """Execute the lighting sequence (thread-safe)"""
+    """Execute the trigger sequence (apply trigger scene, then revert after duration)"""
     if not is_safe_to_operate():
         print("Trigger ignored: safety switch is OFF/unsafe")
+        return False
+
+    trigger_scene = config.TRIGGER_SCENE
+    if trigger_scene is None or trigger_scene not in config.SCENES:
+        print("Trigger ignored: no trigger scene configured")
         return False
 
     print("\nTRIGGER DETECTED!")
 
     with state.timer_lock:
-        # Cancel any existing timer
-        if state.scene_b_timer is not None:
-            state.scene_b_timer.cancel()
+        if state.trigger_timer is not None:
+            state.trigger_timer.cancel()
 
-        # Apply Scene B (Light ON)
-        apply_scene('scene_b')
+        apply_scene(trigger_scene)
 
-        # Set timer to return to Scene A (Light OFF)
-        def _return_to_scene_a():
+        idle_scene = config.IDLE_SCENE
+
+        def _return_to_idle():
             with state.timer_lock:
-                apply_scene('scene_a')
-                state.scene_b_timer = None
+                if idle_scene and idle_scene in config.SCENES:
+                    apply_scene(idle_scene)
+                else:
+                    # Blackout
+                    with state.dmx_lock:
+                        for i in range(1, config.DMX_CHANNELS + 1):
+                            state.dmx_data[i] = 0
+                    state.current_scene = None
+                state.trigger_timer = None
 
-        state.scene_b_timer = Timer(config.SCENE_B_DURATION, _return_to_scene_a)
-        state.scene_b_timer.daemon = True
-        state.scene_b_timer.start()
+        state.trigger_timer = Timer(config.TRIGGER_DURATION, _return_to_idle)
+        state.trigger_timer.daemon = True
+        state.trigger_timer.start()
 
-    print(f"Timer set: Scene A (OFF) in {config.SCENE_B_DURATION} seconds")
+    print(f"Timer set: revert in {config.TRIGGER_DURATION} seconds")
     return True
 
 # ============================================
 # Flask Routes
 # ============================================
 
-
-
-def _validate_channel(channel):
-    return 1 <= channel <= config.DMX_CHANNELS
-
-
-def _sanitize_channel_value(channel, value):
-    if channel == 16:
-        if not (50 <= value <= 200):
-            raise ValueError("Safety channel must be between 50 and 200")
-    return max(0, min(255, int(value)))
-
-
-def _normalize_scene_channels(raw_channels, base_channels=None):
-    """Validate scene channel map and merge onto a known-safe base.
-
-    Returns a complete channel map when a base is supplied, preserving any
-    unspecified channels instead of dropping them.
-    """
-    if not isinstance(raw_channels, dict):
-        raise ValueError("Scene channel data must be an object")
-
-    channels = dict(base_channels) if isinstance(base_channels, dict) else {}
-    for raw_channel, raw_value in raw_channels.items():
-        channel = int(raw_channel)
-        if not _validate_channel(channel):
-            raise ValueError(f"Channel out of range: {channel}")
-        channels[channel] = _sanitize_channel_value(channel, int(raw_value))
-
-    # Never permit an invalid safety value in normalized scenes.
-    channels[16] = _sanitize_channel_value(16, int(channels.get(16, 100)))
-    return channels
-
-
 @app.route('/')
 def index():
-    """Main web interface - serve index.html directly"""
     return send_file(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'index.html'))
 
 
 @app.route('/api/status')
 def api_status():
-    """Get current system status"""
     contact_state = check_contact_state()
     safety_switch_state = check_safety_switch_state()
 
@@ -849,50 +780,113 @@ def api_status():
         'safe_to_operate': is_safe_to_operate(),
         'gpio_available': GPIO_AVAILABLE,
         'gpio_ready': state.gpio_ready,
-        'scene_b_duration': config.SCENE_B_DURATION,
+        'visible_channels': config.VISIBLE_CHANNELS,
+        'trigger_duration': config.TRIGGER_DURATION,
+        'trigger_scene': config.TRIGGER_SCENE,
+        'idle_scene': config.IDLE_SCENE,
+        'artnet_enabled': config.ARTNET_ENABLED,
+        'artnet_target_ip': config.ARTNET_TARGET_IP,
+        'artnet_universe': config.ARTNET_UNIVERSE,
         'channels': get_current_channels(),
+        'channel_labels': {str(k): v for k, v in config.CHANNEL_LABELS.items()},
     })
 
 
 @app.route('/api/trigger', methods=['POST'])
 def api_trigger():
-    """Manually trigger the sequence"""
     if trigger_sequence():
         return jsonify({'success': True})
-    return jsonify({'success': False, 'error': 'Safety switch is OFF - operation blocked'}), 409
+    return jsonify({'success': False, 'error': 'Trigger failed (safety switch OFF or no trigger scene configured)'}), 409
 
 
-@app.route('/api/scene/<scene_name>', methods=['POST'])
-def api_apply_scene(scene_name):
-    """Apply a specific scene"""
-    if scene_name != 'scene_a' and not is_safe_to_operate():
-        return jsonify({'error': 'Safety switch is OFF - operation blocked'}), 409
+@app.route('/api/scene/<scene_id>', methods=['POST'])
+def api_apply_scene(scene_id):
+    if not is_safe_to_operate():
+        return jsonify({'error': 'Safety switch is OFF'}), 409
     with state.timer_lock:
-        if state.scene_b_timer is not None:
-            state.scene_b_timer.cancel()
-            state.scene_b_timer = None
+        if state.trigger_timer is not None:
+            state.trigger_timer.cancel()
+            state.trigger_timer = None
 
-    if apply_scene(scene_name):
-        return jsonify({'success': True, 'scene': scene_name})
+    if apply_scene(scene_id):
+        return jsonify({'success': True, 'scene': scene_id})
     else:
         return jsonify({'error': 'Scene not found'}), 404
 
 
 @app.route('/api/scenes', methods=['GET'])
 def api_list_scenes():
-    """List all available scenes"""
     scenes = {}
-    for key, scene in config.SCENES.items():
-        scenes[key] = {
+    for sid, scene in config.SCENES.items():
+        scenes[sid] = {
             'name': scene['name'],
             'channels': scene['channels']
         }
     return jsonify(scenes)
 
 
+@app.route('/api/scenes', methods=['POST'])
+def api_create_scene():
+    """Create or update a scene"""
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({'error': 'Invalid JSON body'}), 400
+
+    scene_id = data.get('id')
+    name = data.get('name', '')
+    raw_channels = data.get('channels', {})
+
+    if not scene_id or not isinstance(scene_id, str):
+        return jsonify({'error': 'Scene id is required'}), 400
+
+    # Sanitize scene id
+    scene_id = scene_id.strip().replace(' ', '_')[:64]
+    if not scene_id:
+        return jsonify({'error': 'Invalid scene id'}), 400
+
+    channels = {}
+    try:
+        for ch, val in raw_channels.items():
+            ch_int = int(ch)
+            if 1 <= ch_int <= config.DMX_CHANNELS:
+                channels[ch_int] = max(0, min(255, int(val)))
+    except (TypeError, ValueError) as e:
+        return jsonify({'error': f'Invalid channel data: {e}'}), 400
+
+    config.SCENES[scene_id] = {
+        'name': name or scene_id,
+        'channels': channels
+    }
+    save_config()
+
+    if state.current_scene == scene_id:
+        apply_scene(scene_id)
+
+    return jsonify({'success': True, 'id': scene_id})
+
+
+@app.route('/api/scenes/<scene_id>', methods=['DELETE'])
+def api_delete_scene(scene_id):
+    """Delete a scene"""
+    if scene_id not in config.SCENES:
+        return jsonify({'error': 'Scene not found'}), 404
+
+    del config.SCENES[scene_id]
+
+    # Clean up references
+    if config.TRIGGER_SCENE == scene_id:
+        config.TRIGGER_SCENE = None
+    if config.IDLE_SCENE == scene_id:
+        config.IDLE_SCENE = None
+    if state.current_scene == scene_id:
+        state.current_scene = None
+
+    save_config()
+    return jsonify({'success': True})
+
+
 @app.route('/api/channel', methods=['POST'])
 def api_set_channel():
-    """Set individual channel value"""
     data = request.get_json()
     if not data or 'channel' not in data or 'value' not in data:
         return jsonify({'error': 'Missing channel or value'}), 400
@@ -903,86 +897,140 @@ def api_set_channel():
     except (TypeError, ValueError):
         return jsonify({'error': 'Invalid channel or value'}), 400
 
-    if not _validate_channel(channel):
+    if not (1 <= channel <= config.DMX_CHANNELS):
         return jsonify({'error': 'Channel out of range'}), 400
 
-    try:
-        safe_value = _sanitize_channel_value(channel, value)
-    except ValueError as e:
-        return jsonify({'error': str(e)}), 400
-
+    safe_value = max(0, min(255, value))
     set_channel(channel, safe_value)
     return jsonify({'success': True, 'channel': channel, 'value': safe_value})
 
 
+@app.route('/api/channels', methods=['POST'])
+def api_set_channels():
+    """Set multiple channels at once"""
+    data = request.get_json()
+    if not isinstance(data, dict) or 'channels' not in data:
+        return jsonify({'error': 'Missing channels object'}), 400
+
+    try:
+        with state.dmx_lock:
+            for ch, val in data['channels'].items():
+                ch_int = int(ch)
+                if 1 <= ch_int <= config.DMX_CHANNELS:
+                    state.dmx_data[ch_int] = max(0, min(255, int(val)))
+    except (TypeError, ValueError) as e:
+        return jsonify({'error': f'Invalid channel data: {e}'}), 400
+
+    return jsonify({'success': True})
+
+
 @app.route('/api/blackout', methods=['POST'])
 def api_blackout():
-    """Emergency blackout - all channels to zero"""
     with state.timer_lock:
-        if state.scene_b_timer is not None:
-            state.scene_b_timer.cancel()
-            state.scene_b_timer = None
+        if state.trigger_timer is not None:
+            state.trigger_timer.cancel()
+            state.trigger_timer = None
     with state.dmx_lock:
         for i in range(1, config.DMX_CHANNELS + 1):
             state.dmx_data[i] = 0
-        # Keep safety channel valid so fixture stays responsive to future commands
-        state.dmx_data[16] = 100
     state.current_scene = None
-    print("BLACKOUT - All channels zeroed (safety channel kept valid)")
+    print("BLACKOUT - All channels zeroed")
     return jsonify({'success': True})
 
 
 @app.route('/api/config', methods=['GET', 'POST'])
 def api_config():
-    """Get or update configuration"""
     if request.method == 'POST':
         data = request.get_json(silent=True)
         if not isinstance(data, dict):
-            return jsonify({'error': 'Invalid or missing JSON body'}), 400
+            return jsonify({'error': 'Invalid JSON body'}), 400
 
-        # Update any scene
-        for scene_key in ['scene_a', 'scene_b', 'scene_c', 'scene_d']:
-            if scene_key in data:
-                try:
-                    raw = data[scene_key]
-                    channels = _normalize_scene_channels(
-                        raw,
-                        base_channels=config.SCENES[scene_key]['channels'],
-                    )
-                except (TypeError, ValueError) as e:
-                    return jsonify({'error': f'Invalid channel data in {scene_key}: {e}'}), 400
-                config.SCENES[scene_key]['channels'] = channels
-                print(f"Updated {scene_key}: {config.SCENES[scene_key]['channels']}")
-                # Re-apply if it's the current scene
-                if state.current_scene == scene_key:
-                    apply_scene(scene_key)
+        if 'visible_channels' in data:
+            config.VISIBLE_CHANNELS = max(1, min(512, int(data['visible_channels'])))
 
-        # Update duration (clamp to safe range)
-        if 'scene_b_duration' in data:
+        if 'trigger_duration' in data:
             try:
-                dur = float(data['scene_b_duration'])
-                if dur != dur:  # NaN check
+                dur = float(data['trigger_duration'])
+                if dur != dur:
                     return jsonify({'error': 'Invalid duration value'}), 400
-                dur = max(0.5, min(300.0, dur))
-                config.SCENE_B_DURATION = dur
-                print(f"Updated Scene B duration: {config.SCENE_B_DURATION}s")
+                config.TRIGGER_DURATION = max(0.5, min(300.0, dur))
             except (TypeError, ValueError):
                 return jsonify({'error': 'Invalid duration value'}), 400
 
-        # Persist to disk
-        save_config()
+        if 'trigger_scene' in data:
+            val = data['trigger_scene']
+            config.TRIGGER_SCENE = str(val) if val else None
 
+        if 'idle_scene' in data:
+            val = data['idle_scene']
+            config.IDLE_SCENE = str(val) if val else None
+
+        if 'channel_labels' in data and isinstance(data['channel_labels'], dict):
+            for k, v in data['channel_labels'].items():
+                try:
+                    ch = int(k)
+                    label = str(v).strip()
+                    if label:
+                        config.CHANNEL_LABELS[ch] = label
+                    elif ch in config.CHANNEL_LABELS:
+                        del config.CHANNEL_LABELS[ch]
+                except (TypeError, ValueError):
+                    pass
+
+        if 'artnet_enabled' in data:
+            was_enabled = config.ARTNET_ENABLED
+            config.ARTNET_ENABLED = bool(data['artnet_enabled'])
+            if config.ARTNET_ENABLED and not was_enabled:
+                init_artnet()
+            elif not config.ARTNET_ENABLED and was_enabled:
+                if state.artnet_socket:
+                    state.artnet_socket.close()
+                    state.artnet_socket = None
+
+        if 'artnet_target_ip' in data:
+            config.ARTNET_TARGET_IP = str(data['artnet_target_ip'])
+
+        if 'artnet_universe' in data:
+            config.ARTNET_UNIVERSE = max(0, min(32767, int(data['artnet_universe'])))
+
+        save_config()
         return jsonify({'success': True})
     else:
         return jsonify({
-            'scene_a': config.SCENES['scene_a']['channels'],
-            'scene_b': config.SCENES['scene_b']['channels'],
-            'scene_c': config.SCENES['scene_c']['channels'],
-            'scene_d': config.SCENES['scene_d']['channels'],
-            'scene_b_duration': config.SCENE_B_DURATION,
+            'visible_channels': config.VISIBLE_CHANNELS,
+            'trigger_duration': config.TRIGGER_DURATION,
+            'trigger_scene': config.TRIGGER_SCENE,
+            'idle_scene': config.IDLE_SCENE,
+            'channel_labels': {str(k): v for k, v in config.CHANNEL_LABELS.items()},
+            'artnet_enabled': config.ARTNET_ENABLED,
+            'artnet_target_ip': config.ARTNET_TARGET_IP,
+            'artnet_universe': config.ARTNET_UNIVERSE,
             'contact_pin': config.CONTACT_PIN,
             'safety_switch_pin': config.SAFETY_SWITCH_PIN,
+            'scenes': {sid: {'name': s['name'], 'channels': s['channels']} for sid, s in config.SCENES.items()},
         })
+
+
+@app.route('/api/channel-labels', methods=['POST'])
+def api_set_channel_labels():
+    """Update channel labels"""
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({'error': 'Invalid JSON body'}), 400
+
+    for k, v in data.items():
+        try:
+            ch = int(k)
+            label = str(v).strip()
+            if label:
+                config.CHANNEL_LABELS[ch] = label
+            elif ch in config.CHANNEL_LABELS:
+                del config.CHANNEL_LABELS[ch]
+        except (TypeError, ValueError):
+            pass
+
+    save_config()
+    return jsonify({'success': True, 'labels': {str(k): v for k, v in config.CHANNEL_LABELS.items()}})
 
 # ============================================
 # Health Check
@@ -990,7 +1038,6 @@ def api_config():
 
 @app.route('/api/health')
 def api_health():
-    """Health check endpoint for monitoring and install verification."""
     healthy = state.dmx_running and state.dmx_thread is not None and state.dmx_thread.is_alive()
     status_code = 200 if healthy else 503
     return jsonify({
@@ -999,6 +1046,7 @@ def api_health():
         'enttec_url': state.enttec_url,
         'enttec_last_error': state.enttec_last_error,
         'dmx_running': healthy,
+        'artnet_enabled': config.ARTNET_ENABLED,
         'gpio_available': GPIO_AVAILABLE,
         'gpio_ready': state.gpio_ready,
         'safe_to_operate': is_safe_to_operate(),
@@ -1012,7 +1060,7 @@ _initialized = False
 
 
 def _gpio_monitor():
-    """Background thread: polls GPIO for contact closure events with debounce."""
+    """Background thread: polls GPIO for contact closure events."""
     last_state = None
     last_safety_state = None
     last_trigger_time = 0.0
@@ -1033,12 +1081,19 @@ def _gpio_monitor():
             safety_state = check_safety_switch_state()
             if safety_state is not None:
                 if last_safety_state == 0 and safety_state == 1:
-                    print("Safety switch turned OFF - forcing Scene A")
+                    print("Safety switch turned OFF - forcing blackout")
                     with state.timer_lock:
-                        if state.scene_b_timer is not None:
-                            state.scene_b_timer.cancel()
-                            state.scene_b_timer = None
-                    apply_scene('scene_a')
+                        if state.trigger_timer is not None:
+                            state.trigger_timer.cancel()
+                            state.trigger_timer = None
+                    # Apply idle scene or blackout
+                    if config.IDLE_SCENE and config.IDLE_SCENE in config.SCENES:
+                        apply_scene(config.IDLE_SCENE)
+                    else:
+                        with state.dmx_lock:
+                            for i in range(1, config.DMX_CHANNELS + 1):
+                                state.dmx_data[i] = 0
+                        state.current_scene = None
                 last_safety_state = safety_state
 
             if current_state is not None:
@@ -1062,7 +1117,6 @@ def _gpio_monitor():
 
 
 def _cleanup():
-    """Release hardware resources on shutdown."""
     global _initialized
     if not _initialized:
         return
@@ -1072,8 +1126,8 @@ def _cleanup():
     stop_dmx_refresh()
 
     with state.timer_lock:
-        if state.scene_b_timer:
-            state.scene_b_timer.cancel()
+        if state.trigger_timer:
+            state.trigger_timer.cancel()
 
     if state.ftdi_device:
         try:
@@ -1082,6 +1136,13 @@ def _cleanup():
             pass
     state.ftdi_device = None
     state.enttec_url = None
+
+    if state.artnet_socket:
+        try:
+            state.artnet_socket.close()
+        except Exception:
+            pass
+        state.artnet_socket = None
 
     if GPIO_AVAILABLE:
         try:
@@ -1100,20 +1161,13 @@ def _cleanup():
 
 
 def _initialize():
-    """Initialize all hardware and start background threads.
-
-    Safe to call multiple times — only the first call takes effect.
-    Called automatically at module load so that gunicorn workers
-    (which import this module but never call main()) are fully
-    initialized.
-    """
     global _initialized
     if _initialized:
         return
     _initialized = True
 
     print("=" * 60)
-    print("DMX CONTROLLER - DJPOWER H-IP20V Fog Machine")
+    print("DMX CONTROLLER - General Purpose")
     print("=" * 60)
     print()
 
@@ -1122,26 +1176,34 @@ def _initialize():
     if not init_enttec():
         print("WARNING: ENTTEC not available at startup. Will keep retrying in the background.")
 
+    if config.ARTNET_ENABLED:
+        init_artnet()
+
     start_dmx_refresh()
     time.sleep(0.5)
 
     init_gpio()
-    apply_scene('scene_a')
 
     if GPIO_AVAILABLE:
         Thread(target=_gpio_monitor, daemon=True).start()
 
-    # Register cleanup for graceful shutdown
     atexit.register(_cleanup)
+
+    outputs = []
+    if state.ftdi_device is not None:
+        outputs.append("ENTTEC USB")
+    elif FTDI_AVAILABLE:
+        outputs.append("ENTTEC USB (retrying)")
+    if config.ARTNET_ENABLED:
+        outputs.append(f"Art-Net ({config.ARTNET_TARGET_IP} universe {config.ARTNET_UNIVERSE})")
 
     print()
     print("=" * 60)
     print("System ready!")
-    print("   Default: All OFF (Scene A)")
-    print(f"   On trigger: Fog ON for {config.SCENE_B_DURATION} seconds (Scene B)")
-    print("   Custom scenes: C & D available")
-    print()
-    print("   Web interface: http://0.0.0.0:5000")
+    print(f"   Visible channels: {config.VISIBLE_CHANNELS}")
+    print(f"   Output: {', '.join(outputs) if outputs else 'none configured'}")
+    print(f"   Scenes loaded: {len(config.SCENES)}")
+    print(f"   Web interface: http://0.0.0.0:5000")
     if GPIO_AVAILABLE and state.gpio_ready:
         print(f"   GPIO trigger pin {config.CONTACT_PIN} monitoring active")
         print(f"   GPIO safety switch pin {config.SAFETY_SWITCH_PIN} monitoring active")
@@ -1152,18 +1214,14 @@ def _initialize():
 
 
 def _on_sigterm(_signum, _frame):
-    """Convert SIGTERM to a clean exit so atexit handlers run."""
     sys.exit(0)
 
 
-# --- Module-level initialization ---
-# This runs when gunicorn imports the module (app:app) OR when run directly.
 signal.signal(signal.SIGTERM, _on_sigterm)
 _initialize()
 
 
 def main():
-    """Entry point for direct execution (python app.py)."""
     try:
         app.run(host='0.0.0.0', port=5000, debug=False)
     except KeyboardInterrupt:

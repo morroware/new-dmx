@@ -40,7 +40,7 @@ fi
 echo ""
 echo "========================================"
 echo "  DMX Controller Installer"
-echo "  DJPOWER H-IP20V Fog Machine"
+echo "  General-Purpose DMX512 Testing"
 echo "========================================"
 echo ""
 info "Install directory : ${INSTALL_DIR}"
@@ -69,8 +69,6 @@ ok "System packages installed"
 # ------------------------------------------
 # 2. Blacklist ftdi_sio kernel module
 # ------------------------------------------
-# The kernel's ftdi_sio driver claims FTDI USB devices before pyftdi can
-# access them.  Blacklisting is required for the ENTTEC adapter to work.
 MODPROBE_FILE="/etc/modprobe.d/ftdi-blacklist.conf"
 if [ ! -f "$MODPROBE_FILE" ]; then
     info "Blacklisting ftdi_sio kernel module..."
@@ -150,7 +148,7 @@ else
 fi
 
 # ------------------------------------------
-# 5c. Environment file (config path)
+# 5c. Environment file
 # ------------------------------------------
 ENV_DIR="/etc/dmx"
 ENV_FILE="${ENV_DIR}/dmx.env"
@@ -159,6 +157,9 @@ mkdir -p "$ENV_DIR"
 if [ ! -f "$ENV_FILE" ]; then
     cat > "$ENV_FILE" <<EOF
 DMX_CONFIG_DIR=${CONFIG_DIR}
+# DMX_ARTNET_ENABLED=true
+# DMX_ARTNET_TARGET_IP=255.255.255.255
+# DMX_ARTNET_UNIVERSE=0
 EOF
     chown root:"$RUN_USER" "$ENV_FILE"
     chmod 640 "$ENV_FILE"
@@ -184,7 +185,7 @@ ok "Python dependencies installed"
 info "Creating systemd service..."
 cat > "$SERVICE_FILE" <<EOF
 [Unit]
-Description=DMX Controller - DJPOWER H-IP20V
+Description=DMX Controller - General Purpose
 After=network.target
 
 [Service]
@@ -237,7 +238,6 @@ HEALTH_OK=false
 for i in 1 2 3 4 5; do
     HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 3 --max-time 5 http://127.0.0.1:5000/api/health 2>/dev/null || echo "000")
     if [ "$HTTP_CODE" = "200" ] || [ "$HTTP_CODE" = "503" ]; then
-        # 200 = fully healthy, 503 = degraded (ENTTEC not plugged in) — both mean app is up
         HEALTH_OK=true
         break
     fi
@@ -274,11 +274,10 @@ else
     echo "  Web interface: http://<your-pi-ip>:5000"
 fi
 
-
 echo ""
 echo "  The service starts automatically on boot."
 echo "  Plug in the ENTTEC Open DMX USB adapter and"
-echo "  connect your DJPOWER H-IP20V fog machine."
+echo "  connect your DMX fixtures."
 echo ""
 echo "  To uninstall:  sudo ./uninstall.sh"
 echo ""
