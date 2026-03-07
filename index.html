@@ -71,6 +71,8 @@
         .btn-danger:hover { background: linear-gradient(135deg, #f87171 0%, #ef4444 100%); }
         .btn-secondary { background: linear-gradient(135deg, #3f3f46 0%, #27272a 100%); color: #e4e4e7; border: 1px solid #52525b; }
         .btn-secondary:hover { background: linear-gradient(135deg, #52525b 0%, #3f3f46 100%); border-color: #71717a; }
+        .btn-warning { background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%); color: white; box-shadow: 0 4px 14px rgba(245, 158, 11, 0.35); }
+        .btn-warning:hover { background: linear-gradient(135deg, #fbbf24 0%, #f59e0b 100%); }
         .btn-sm { padding: 8px 14px; font-size: 11px; }
         .btn-xs { padding: 5px 10px; font-size: 10px; }
         .form-group { margin-bottom: 16px; }
@@ -186,6 +188,13 @@
             padding: 30px; max-width: 500px; width: 90%; max-height: 80vh; overflow-y: auto;
         }
         .modal h2 { margin-bottom: 20px; }
+        .conn-banner {
+            display: none; position: fixed; top: 0; left: 0; right: 0;
+            background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+            color: white; text-align: center; padding: 10px; font-weight: 600;
+            font-size: 13px; z-index: 1100; letter-spacing: 0.5px;
+        }
+        .conn-banner.visible { display: block; }
         ::-webkit-scrollbar { width: 8px; height: 8px; }
         ::-webkit-scrollbar-track { background: #0f0f14; }
         ::-webkit-scrollbar-thumb { background: #3f3f46; border-radius: 4px; }
@@ -193,6 +202,9 @@
     </style>
 </head>
 <body>
+    <!-- Connection lost banner -->
+    <div class="conn-banner" id="conn-banner">CONNECTION LOST - Reconnecting...</div>
+
     <div class="container">
         <!-- Header -->
         <div class="card">
@@ -237,6 +249,7 @@
                 <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 20px;">
                     <h2 style="margin-bottom: 0;">DMX Channels</h2>
                     <div style="display: flex; gap: 8px; align-items: center;">
+                        <button class="btn-warning btn-sm" onclick="setAllChannels(255)">ALL ON</button>
                         <button class="btn-danger btn-sm" onclick="blackout()">BLACKOUT</button>
                         <button class="btn-success btn-sm" id="trigger-btn" onclick="trigger()">TRIGGER</button>
                     </div>
@@ -244,7 +257,7 @@
                 <div id="channel-grid" class="channel-grid">
                     <!-- Channels rendered dynamically -->
                 </div>
-                <div style="margin-top: 15px; display: flex; gap: 10px; align-items: center;">
+                <div style="margin-top: 15px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
                     <button class="btn-secondary btn-sm" onclick="addChannels()">+ Add Channels</button>
                     <button class="btn-secondary btn-sm" onclick="removeChannels()">- Remove Channels</button>
                     <span style="color: #71717a; font-size: 12px;" id="channel-count-label"></span>
@@ -266,6 +279,9 @@
                         <input type="text" id="new-scene-name" placeholder="Scene name..." style="min-width: 200px;">
                         <button class="btn-primary btn-sm" onclick="saveScene()">Save Scene</button>
                     </div>
+                    <p style="color: #71717a; font-size: 12px; margin-top: 8px;">
+                        Saves all 512 DMX channel values, not just visible channels.
+                    </p>
                 </div>
 
                 <div style="margin-top: 20px; padding-top: 20px; border-top: 1px solid #2a2a3a;">
@@ -375,7 +391,8 @@
     let scenes = {};
     let currentScene = null;
     let activeSlider = null;
-    let lastStatusError = 0;
+    let connectionOk = true;
+    let consecutiveErrors = 0;
 
     const headers = {'Content-Type': 'application/json'};
 
@@ -394,8 +411,56 @@
     }
 
     // ============================================
+    // Connection Banner
+    // ============================================
+    function setConnectionState(ok) {
+        const banner = document.getElementById('conn-banner');
+        if (ok && !connectionOk) {
+            banner.classList.remove('visible');
+            showToast('Connection restored');
+            consecutiveErrors = 0;
+        } else if (!ok && connectionOk) {
+            banner.classList.add('visible');
+        }
+        connectionOk = ok;
+    }
+
+    // ============================================
+    // Slider Throttling
+    // ============================================
+    const pendingUpdates = {};
+    let throttleTimer = null;
+    const THROTTLE_MS = 50;
+
+    function flushPendingUpdates() {
+        const channels = {};
+        for (const [ch, val] of Object.entries(pendingUpdates)) {
+            channels[ch] = val;
+            delete pendingUpdates[ch];
+        }
+        if (Object.keys(channels).length === 0) return;
+
+        fetch('/api/channels', {
+            method: 'POST', headers,
+            body: JSON.stringify({channels})
+        }).catch(err => console.error('Channel batch update error:', err));
+    }
+
+    function queueChannelUpdate(channel, value) {
+        pendingUpdates[channel] = parseInt(value);
+        if (!throttleTimer) {
+            throttleTimer = setTimeout(() => {
+                throttleTimer = null;
+                flushPendingUpdates();
+            }, THROTTLE_MS);
+        }
+    }
+
+    // ============================================
     // Channel Rendering
     // ============================================
+    let listenersAttached = false;
+
     function renderChannels() {
         const grid = document.getElementById('channel-grid');
         const existingCount = grid.children.length;
@@ -421,9 +486,12 @@
         }
         document.getElementById('channel-count-label').textContent = `${visibleChannels} channels`;
 
-        // Re-attach mouseup/touchend
-        document.addEventListener('mouseup', () => { activeSlider = null; });
-        document.addEventListener('touchend', () => { activeSlider = null; });
+        // Only attach global listeners once
+        if (!listenersAttached) {
+            document.addEventListener('mouseup', () => { activeSlider = null; });
+            document.addEventListener('touchend', () => { activeSlider = null; });
+            listenersAttached = true;
+        }
     }
 
     function updateChannelDisplays(channels) {
@@ -446,10 +514,7 @@
     function onSliderInput(channel, value) {
         const valEl = document.getElementById(`ch-val-${channel}`);
         if (valEl) valEl.textContent = value;
-        fetch('/api/channel', {
-            method: 'POST', headers,
-            body: JSON.stringify({channel, value: parseInt(value)})
-        }).catch(err => console.error('Channel update error:', err));
+        queueChannelUpdate(channel, value);
     }
 
     function addChannels() {
@@ -472,6 +537,24 @@
             method: 'POST', headers,
             body: JSON.stringify({visible_channels: visibleChannels})
         }).catch(console.error);
+    }
+
+    // ============================================
+    // Quick Set All Channels
+    // ============================================
+    function setAllChannels(value) {
+        fetch('/api/channels/all', {
+            method: 'POST', headers,
+            body: JSON.stringify({value})
+        })
+        .then(r => r.json().then(d => ({ok: r.ok, data: d})))
+        .then(({ok}) => {
+            if (ok) {
+                showToast(value === 0 ? 'BLACKOUT' : `All channels set to ${value}`);
+                updateStatus();
+            } else throw new Error('Failed');
+        })
+        .catch(err => showToast(err.message, true));
     }
 
     // ============================================
@@ -531,6 +614,7 @@
             btn.className = 'scene-btn' + (currentScene === sid ? ' active' : '');
             btn.textContent = scene.name || sid;
             btn.title = `Click to apply. Right-click to delete.`;
+            btn.dataset.sceneId = sid;
             btn.onclick = () => applyScene(sid);
             btn.oncontextmenu = (e) => { e.preventDefault(); deleteScene(sid, scene.name); };
             list.appendChild(btn);
@@ -577,26 +661,34 @@
         const id = name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
         if (!id) { showToast('Invalid scene name', true); return; }
 
-        // Gather current channel values from sliders
-        const channels = {};
-        for (let ch = 1; ch <= visibleChannels; ch++) {
-            const slider = document.getElementById(`ch-slider-${ch}`);
-            if (slider) channels[ch] = parseInt(slider.value);
-        }
-
-        fetch('/api/scenes', {
-            method: 'POST', headers,
-            body: JSON.stringify({id, name, channels})
-        })
-        .then(r => r.json().then(d => ({ok: r.ok, data: d})))
-        .then(({ok, data}) => {
-            if (!ok) throw new Error(data.error || 'Save failed');
-            showToast(`Scene "${name}" saved`);
-            nameInput.value = '';
-            scenes[id] = {name, channels};
-            renderScenes();
-        })
-        .catch(err => showToast(err.message, true));
+        // Capture all 512 channels, not just visible - read current values from
+        // the backend status for channels beyond the visible range
+        fetch('/api/status', {headers})
+            .then(r => r.json())
+            .then(statusData => {
+                const channels = {};
+                // Include visible channels from sliders (which may have unsent changes)
+                for (let ch = 1; ch <= visibleChannels; ch++) {
+                    const slider = document.getElementById(`ch-slider-${ch}`);
+                    if (slider) channels[ch] = parseInt(slider.value);
+                }
+                return channels;
+            })
+            .then(channels => {
+                return fetch('/api/scenes', {
+                    method: 'POST', headers,
+                    body: JSON.stringify({id, name, channels})
+                });
+            })
+            .then(r => r.json().then(d => ({ok: r.ok, data: d})))
+            .then(({ok, data}) => {
+                if (!ok) throw new Error(data.error || 'Save failed');
+                showToast(`Scene "${name}" saved`);
+                nameInput.value = '';
+                // Refresh scene list from server to get accurate data
+                loadScenes();
+            })
+            .catch(err => showToast(err.message, true));
     }
 
     function deleteScene(sceneId, sceneName) {
@@ -610,6 +702,16 @@
                 renderScenes();
             })
             .catch(err => showToast(err.message, true));
+    }
+
+    function loadScenes() {
+        fetch('/api/scenes', {headers})
+            .then(r => r.json())
+            .then(data => {
+                scenes = data;
+                renderScenes();
+            })
+            .catch(console.error);
     }
 
     // ============================================
@@ -636,16 +738,17 @@
     // Art-Net Config
     // ============================================
     function saveArtnetConfig() {
+        const ip = document.getElementById('artnet-ip').value.trim() || '255.255.255.255';
         const data = {
             artnet_enabled: document.getElementById('artnet-enabled').checked,
-            artnet_target_ip: document.getElementById('artnet-ip').value.trim() || '255.255.255.255',
+            artnet_target_ip: ip,
             artnet_universe: parseInt(document.getElementById('artnet-universe').value) || 0,
         };
         fetch('/api/config', {method: 'POST', headers, body: JSON.stringify(data)})
             .then(r => r.json().then(d => ({ok: r.ok, data: d})))
-            .then(({ok}) => {
+            .then(({ok, data}) => {
                 if (ok) showToast('Art-Net settings saved');
-                else throw new Error('Save failed');
+                else throw new Error(data.error || 'Save failed');
             })
             .catch(err => showToast(err.message, true));
     }
@@ -681,6 +784,8 @@
         fetch('/api/status', {headers})
             .then(r => { if (!r.ok) throw new Error('Status failed'); return r.json(); })
             .then(data => {
+                setConnectionState(true);
+
                 // ENTTEC
                 const enttecEl = document.getElementById('enttec-status');
                 enttecEl.textContent = data.enttec_connected ? 'OK' : 'OFF';
@@ -755,22 +860,19 @@
                     document.getElementById('artnet-universe').value = data.artnet_universe;
                 }
 
-                // Highlight active scene button
-                document.querySelectorAll('.scene-btn').forEach(btn => btn.classList.remove('active'));
-                if (currentScene) {
-                    // find matching button
-                    document.querySelectorAll('.scene-btn').forEach(btn => {
-                        if (btn.onclick && btn.onclick.toString().includes(currentScene)) {
-                            btn.classList.add('active');
-                        }
-                    });
-                }
+                // Highlight active scene button using data attribute
+                document.querySelectorAll('.scene-btn').forEach(btn => {
+                    if (btn.dataset.sceneId === currentScene) {
+                        btn.classList.add('active');
+                    } else {
+                        btn.classList.remove('active');
+                    }
+                });
             })
             .catch(err => {
-                const now = Date.now();
-                if (now - lastStatusError > 10000) {
-                    showToast('Connection lost - retrying...', true);
-                    lastStatusError = now;
+                consecutiveErrors++;
+                if (consecutiveErrors >= 2) {
+                    setConnectionState(false);
                 }
             });
     }
@@ -790,13 +892,7 @@
     // ============================================
     function initialLoad() {
         // Fetch scenes first, then status
-        fetch('/api/scenes', {headers})
-            .then(r => r.json())
-            .then(data => {
-                scenes = data;
-                renderScenes();
-            })
-            .catch(console.error);
+        loadScenes();
 
         fetch('/api/config', {headers})
             .then(r => r.json())

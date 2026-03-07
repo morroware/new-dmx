@@ -8,15 +8,27 @@ Configurable channels, unlimited named scenes, and web UI.
 from flask import Flask, jsonify, request, send_file
 import time
 import json
+import logging
 import os
 import sys
 import glob
 import atexit
+import ipaddress
 import signal
 import socket
 import struct
 import tempfile
 from threading import Lock, Timer, Thread
+
+# ============================================
+# Logging Setup
+# ============================================
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+logger = logging.getLogger("dmx")
 
 try:
     from pyftdi.ftdi import Ftdi
@@ -52,7 +64,7 @@ elif lgpio is not None:
     GPIO_AVAILABLE = True
     GPIO_LIB = 'lgpio'
 else:
-    print("WARNING: No GPIO library available")
+    logger.warning("No GPIO library available")
 
 app = Flask(__name__)
 
@@ -146,7 +158,7 @@ def save_config():
                 pass
             raise
     except Exception as e:
-        print(f"WARNING: Could not save config: {e}")
+        logger.warning("Could not save config: %s", e)
 
 
 def load_config():
@@ -191,11 +203,11 @@ def load_config():
                         'channels': channels
                     }
                 except (TypeError, ValueError) as e:
-                    print(f"WARNING: Invalid scene data for {sid}: {e}")
+                    logger.warning("Invalid scene data for %s: %s", sid, e)
 
-        print("Loaded saved configuration from disk")
+        logger.info("Loaded saved configuration from disk")
     except Exception as e:
-        print(f"WARNING: Could not load config (using defaults): {e}")
+        logger.warning("Could not load config (using defaults): %s", e)
 
 # ============================================
 # Global State
@@ -227,6 +239,19 @@ class SystemState:
 state = SystemState()
 
 # ============================================
+# Validation Helpers
+# ============================================
+
+def validate_ip_address(ip_str):
+    """Validate an IP address string. Returns True if valid."""
+    try:
+        ipaddress.ip_address(ip_str)
+        return True
+    except ValueError:
+        # Also allow broadcast "255.255.255.255"
+        return ip_str == "255.255.255.255"
+
+# ============================================
 # Art-Net Functions
 # ============================================
 
@@ -241,10 +266,11 @@ def init_artnet():
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
         state.artnet_socket = sock
-        print(f"Art-Net initialized: target={config.ARTNET_TARGET_IP}:{config.ARTNET_PORT} universe={config.ARTNET_UNIVERSE}")
+        logger.info("Art-Net initialized: target=%s:%d universe=%d",
+                     config.ARTNET_TARGET_IP, config.ARTNET_PORT, config.ARTNET_UNIVERSE)
         return True
     except Exception as e:
-        print(f"WARNING: Could not initialize Art-Net: {e}")
+        logger.warning("Could not initialize Art-Net: %s", e)
         state.artnet_socket = None
         return False
 
@@ -258,9 +284,12 @@ def send_artnet_frame():
         if state.artnet_sequence == 0:
             state.artnet_sequence = 1
 
-        # Art-Net DMX packet structure
-        universe = (config.ARTNET_SUBNET << 4) | (config.ARTNET_UNIVERSE & 0x0F)
-        universe_hi = config.ARTNET_NET & 0x7F
+        # Art-Net universe addressing: 15-bit field split into
+        # Net (bits 14-8), Sub-Uni (bits 7-4), Universe (bits 3-0)
+        # For the wire format: low byte = (subnet << 4) | universe, high byte = net
+        full_universe = config.ARTNET_UNIVERSE
+        universe_lo = full_universe & 0xFF
+        universe_hi = (full_universe >> 8) & 0x7F
 
         with state.dmx_lock:
             dmx_payload = bytes(state.dmx_data[1:513])  # channels 1-512
@@ -273,8 +302,8 @@ def send_artnet_frame():
         packet.extend(struct.pack('>H', 14))                  # 2 bytes: protocol version (big-endian)
         packet.append(state.artnet_sequence)                  # 1 byte: sequence
         packet.append(0)                                      # 1 byte: physical port
-        packet.append(universe & 0xFF)                        # 1 byte: universe low
-        packet.append(universe_hi & 0xFF)                     # 1 byte: universe high
+        packet.append(universe_lo)                            # 1 byte: universe low
+        packet.append(universe_hi)                            # 1 byte: universe high
         packet.extend(struct.pack('>H', length))              # 2 bytes: data length (big-endian)
         packet.extend(dmx_payload)                            # N bytes: DMX data
 
@@ -283,7 +312,7 @@ def send_artnet_frame():
             (config.ARTNET_TARGET_IP, config.ARTNET_PORT)
         )
     except Exception as e:
-        print(f"WARNING: Art-Net send error: {e}")
+        logger.warning("Art-Net send error: %s", e)
 
 # ============================================
 # ENTTEC DMX Functions
@@ -293,7 +322,7 @@ def init_enttec():
     """Initialize ENTTEC Open DMX USB"""
     if not FTDI_AVAILABLE:
         state.enttec_last_error = f"pyftdi unavailable: {ftdi_import_error}"
-        print(f"ERROR: {state.enttec_last_error}")
+        logger.error("%s", state.enttec_last_error)
         return False
 
     def _candidate_urls(devices):
@@ -313,19 +342,19 @@ def init_enttec():
         return list(dict.fromkeys(urls))
 
     try:
-        print("Initializing ENTTEC Open DMX USB...")
+        logger.info("Initializing ENTTEC Open DMX USB...")
         devices = Ftdi.list_devices()
         if not devices:
-            print("WARNING: No FTDI devices found (ENTTEC not connected)")
+            logger.warning("No FTDI devices found (ENTTEC not connected)")
             state.enttec_last_error = "No FTDI devices found"
             return False
 
-        print(f"Found {len(devices)} FTDI device(s)")
+        logger.info("Found %d FTDI device(s)", len(devices))
         for idx, (desc, _iface) in enumerate(devices, start=1):
-            print(
-                f"  Device {idx}: vid=0x{getattr(desc, 'vid', 0):04x} "
-                f"pid=0x{getattr(desc, 'pid', 0):04x} "
-                f"serial={getattr(desc, 'sn', 'n/a')}"
+            logger.info(
+                "  Device %d: vid=0x%04x pid=0x%04x serial=%s",
+                idx, getattr(desc, 'vid', 0), getattr(desc, 'pid', 0),
+                getattr(desc, 'sn', 'n/a')
             )
 
         last_error = None
@@ -336,11 +365,11 @@ def init_enttec():
                 state.ftdi_device = ftdi
                 state.enttec_url = url
                 state.enttec_last_error = None
-                print(f"Opened FTDI device with URL: {url}")
+                logger.info("Opened FTDI device with URL: %s", url)
                 break
             except Exception as e:
                 last_error = e
-                print(f"  FTDI open failed for {url}: {e}")
+                logger.debug("  FTDI open failed for %s: %s", url, e)
 
         if state.ftdi_device is None:
             hint = (
@@ -349,7 +378,7 @@ def init_enttec():
                 "and DMX_FTDI_URL points at the correct adapter/interface."
             )
             state.enttec_last_error = f"{hint} Last error: {last_error}"
-            print(f"ERROR: {state.enttec_last_error}")
+            logger.error("%s", state.enttec_last_error)
             return False
 
         # Configure for DMX512
@@ -357,12 +386,12 @@ def init_enttec():
         state.ftdi_device.set_line_property(8, 2, 'N')
         state.ftdi_device.set_latency_timer(1)
 
-        print("ENTTEC initialized successfully")
+        logger.info("ENTTEC initialized successfully")
         return True
 
     except Exception as e:
         state.enttec_last_error = str(e)
-        print(f"ERROR initializing ENTTEC: {e}")
+        logger.error("Error initializing ENTTEC: %s", e)
         return False
 
 
@@ -378,7 +407,7 @@ def reinit_enttec():
             state.enttec_url = None
         return init_enttec()
     except Exception as e:
-        print(f"ERROR re-initializing ENTTEC: {e}")
+        logger.error("Error re-initializing ENTTEC: %s", e)
         return False
 
 
@@ -391,7 +420,7 @@ def dmx_refresh_thread():
     offline_backoff = 1.0
     offline_backoff_max = 10.0
 
-    print(f"DMX refresh thread started ({config.DMX_REFRESH_RATE} Hz)")
+    logger.info("DMX refresh thread started (%d Hz)", config.DMX_REFRESH_RATE)
 
     while state.dmx_running:
         enttec_ok = False
@@ -409,16 +438,18 @@ def dmx_refresh_thread():
         except Exception as e:
             consecutive_errors += 1
             if consecutive_errors <= MAX_ERRORS_BEFORE_REINIT:
-                print(f"WARNING: DMX refresh error ({consecutive_errors}/{MAX_ERRORS_BEFORE_REINIT}): {e}")
+                logger.warning("DMX refresh error (%d/%d): %s",
+                               consecutive_errors, MAX_ERRORS_BEFORE_REINIT, e)
                 time.sleep(0.1)
             else:
-                print(f"ERROR: {consecutive_errors} consecutive DMX failures. Attempting ENTTEC re-init...")
+                logger.error("%d consecutive DMX failures. Attempting ENTTEC re-init...",
+                             consecutive_errors)
                 time.sleep(REINIT_BACKOFF)
                 if reinit_enttec():
-                    print("ENTTEC re-initialized successfully, resuming DMX output")
+                    logger.info("ENTTEC re-initialized successfully, resuming DMX output")
                     consecutive_errors = 0
                 else:
-                    print(f"ENTTEC re-init failed. Retrying in {REINIT_BACKOFF}s...")
+                    logger.warning("ENTTEC re-init failed. Retrying in %.1fs...", REINIT_BACKOFF)
 
         # Always send Art-Net if enabled, regardless of ENTTEC status
         if config.ARTNET_ENABLED:
@@ -433,7 +464,7 @@ def dmx_refresh_thread():
 
         time.sleep(refresh_interval)
 
-    print("DMX refresh thread stopped")
+    logger.info("DMX refresh thread stopped")
 
 
 def start_dmx_refresh():
@@ -459,20 +490,29 @@ def set_channel(channel, value):
             state.dmx_data[int(channel)] = max(0, min(255, int(value)))
 
 
-def apply_scene(scene_id):
-    """Apply a scene to DMX channels"""
+def apply_scene(scene_id, zero_unset=True):
+    """Apply a scene to DMX channels.
+
+    Args:
+        scene_id: The scene identifier to apply.
+        zero_unset: If True, channels not defined in the scene are set to 0.
+                    This ensures clean, predictable state for device testing.
+    """
     if scene_id not in config.SCENES:
-        print(f"ERROR: Scene '{scene_id}' not found")
+        logger.error("Scene '%s' not found", scene_id)
         return False
 
     scene = config.SCENES[scene_id]
     with state.dmx_lock:
+        if zero_unset:
+            for i in range(1, config.DMX_CHANNELS + 1):
+                state.dmx_data[i] = 0
         for channel, value in scene['channels'].items():
             if 1 <= int(channel) <= config.DMX_CHANNELS:
                 state.dmx_data[int(channel)] = max(0, min(255, int(value)))
 
     state.current_scene = scene_id
-    print(f"Applied scene: {scene['name']}")
+    logger.info("Applied scene: %s", scene['name'])
     return True
 
 
@@ -536,7 +576,7 @@ def _open_gpiod_line(chip_id):
             direction=direction_enum.INPUT,
             bias=bias_enum.PULL_UP,
         )
-        request = gpiod.request_lines(
+        line_request = gpiod.request_lines(
             chip_path,
             consumer="dmx_controller",
             config={
@@ -544,7 +584,7 @@ def _open_gpiod_line(chip_id):
                 config.SAFETY_SWITCH_PIN: line_settings,
             },
         )
-        return None, request
+        return None, line_request
 
     chip = gpiod.Chip(chip_id) if chip_id is not None else None
     try:
@@ -594,7 +634,7 @@ def init_gpio():
     global GPIO_LIB
 
     if not GPIO_AVAILABLE:
-        print("GPIO not available (not running on Raspberry Pi)")
+        logger.info("GPIO not available (not running on Raspberry Pi)")
         return False
 
     if state.gpio_line is not None or state.gpio_chip is not None:
@@ -608,7 +648,7 @@ def init_gpio():
             if GPIO_LIB == 'lgpio' and state.gpio_chip is not None:
                 lgpio.gpiochip_close(state.gpio_chip)
         except Exception as e:
-            print(f"WARNING: GPIO cleanup before init failed: {e}")
+            logger.warning("GPIO cleanup before init failed: %s", e)
         state.gpio_line = None
         state.gpio_safety_line = None
         state.gpio_chip = None
@@ -643,10 +683,11 @@ def init_gpio():
                         state.gpio_ready = True
                         state.gpio_chip_id = chip_id
                         GPIO_LIB = 'gpiod'
-                        print(f"GPIO initialized (gpiod) - {chip_id} pin {config.CONTACT_PIN} with pull-up")
+                        logger.info("GPIO initialized (gpiod) - %s pin %d with pull-up",
+                                    chip_id, config.CONTACT_PIN)
                         return True
                     except Exception as e:
-                        print(f"GPIO init failed on {chip_id} (gpiod): {e}")
+                        logger.debug("GPIO init failed on %s (gpiod): %s", chip_id, e)
 
             elif lib == 'lgpio':
                 for chip_id in _gpiochip_candidates():
@@ -655,16 +696,17 @@ def init_gpio():
                         state.gpio_ready = True
                         state.gpio_chip_id = chip_id
                         GPIO_LIB = 'lgpio'
-                        print(f"GPIO initialized (lgpio) - {chip_id} pin {config.CONTACT_PIN} with pull-up")
+                        logger.info("GPIO initialized (lgpio) - %s pin %d with pull-up",
+                                    chip_id, config.CONTACT_PIN)
                         return True
                     except Exception as e:
-                        print(f"GPIO init failed on {chip_id} (lgpio): {e}")
+                        logger.debug("GPIO init failed on %s (lgpio): %s", chip_id, e)
 
         except Exception as e:
-            print(f"GPIO initialization failed ({lib}): {e}")
+            logger.warning("GPIO initialization failed (%s): %s", lib, e)
 
     state.gpio_ready = False
-    print("GPIO: all libraries and chips exhausted — GPIO trigger unavailable")
+    logger.warning("GPIO: all libraries and chips exhausted - trigger unavailable")
     return False
 
 
@@ -694,7 +736,7 @@ def check_contact_state():
     try:
         return _read_gpio_pin(config.CONTACT_PIN)
     except Exception as e:
-        print(f"WARNING: GPIO read error: {e}")
+        logger.warning("GPIO read error: %s", e)
         return None
 
 
@@ -704,7 +746,7 @@ def check_safety_switch_state():
     try:
         return _read_gpio_pin(config.SAFETY_SWITCH_PIN)
     except Exception as e:
-        print(f"WARNING: Safety GPIO read error: {e}")
+        logger.warning("Safety GPIO read error: %s", e)
         return None
 
 
@@ -718,15 +760,15 @@ def is_safe_to_operate():
 def trigger_sequence():
     """Execute the trigger sequence (apply trigger scene, then revert after duration)"""
     if not is_safe_to_operate():
-        print("Trigger ignored: safety switch is OFF/unsafe")
+        logger.info("Trigger ignored: safety switch is OFF/unsafe")
         return False
 
     trigger_scene = config.TRIGGER_SCENE
     if trigger_scene is None or trigger_scene not in config.SCENES:
-        print("Trigger ignored: no trigger scene configured")
+        logger.info("Trigger ignored: no trigger scene configured")
         return False
 
-    print("\nTRIGGER DETECTED!")
+    logger.info("TRIGGER DETECTED!")
 
     with state.timer_lock:
         if state.trigger_timer is not None:
@@ -752,7 +794,7 @@ def trigger_sequence():
         state.trigger_timer.daemon = True
         state.trigger_timer.start()
 
-    print(f"Timer set: revert in {config.TRIGGER_DURATION} seconds")
+    logger.info("Timer set: revert in %.1f seconds", config.TRIGGER_DURATION)
     return True
 
 # ============================================
@@ -934,8 +976,28 @@ def api_blackout():
         for i in range(1, config.DMX_CHANNELS + 1):
             state.dmx_data[i] = 0
     state.current_scene = None
-    print("BLACKOUT - All channels zeroed")
+    logger.info("BLACKOUT - All channels zeroed")
     return jsonify({'success': True})
+
+
+@app.route('/api/channels/all', methods=['POST'])
+def api_set_all_channels():
+    """Set all visible channels to a single value"""
+    data = request.get_json()
+    if not isinstance(data, dict) or 'value' not in data:
+        return jsonify({'error': 'Missing value'}), 400
+
+    try:
+        value = max(0, min(255, int(data['value'])))
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Invalid value'}), 400
+
+    with state.dmx_lock:
+        for i in range(1, config.VISIBLE_CHANNELS + 1):
+            state.dmx_data[i] = value
+    state.current_scene = None
+    logger.info("Set all %d channels to %d", config.VISIBLE_CHANNELS, value)
+    return jsonify({'success': True, 'value': value})
 
 
 @app.route('/api/config', methods=['GET', 'POST'])
@@ -988,7 +1050,10 @@ def api_config():
                     state.artnet_socket = None
 
         if 'artnet_target_ip' in data:
-            config.ARTNET_TARGET_IP = str(data['artnet_target_ip'])
+            ip_str = str(data['artnet_target_ip']).strip()
+            if not validate_ip_address(ip_str):
+                return jsonify({'error': f'Invalid IP address: {ip_str}'}), 400
+            config.ARTNET_TARGET_IP = ip_str
 
         if 'artnet_universe' in data:
             config.ARTNET_UNIVERSE = max(0, min(32767, int(data['artnet_universe'])))
@@ -1067,11 +1132,11 @@ def _gpio_monitor():
     consecutive_errors = 0
     max_errors_before_reinit = 3
 
-    while True:
+    while state.dmx_running:
         try:
             if not state.gpio_ready:
                 if init_gpio():
-                    print("GPIO initialized from monitor thread")
+                    logger.info("GPIO initialized from monitor thread")
                     last_state = None
                 else:
                     time.sleep(5.0)
@@ -1081,7 +1146,7 @@ def _gpio_monitor():
             safety_state = check_safety_switch_state()
             if safety_state is not None:
                 if last_safety_state == 0 and safety_state == 1:
-                    print("Safety switch turned OFF - forcing blackout")
+                    logger.warning("Safety switch turned OFF - forcing blackout")
                     with state.timer_lock:
                         if state.trigger_timer is not None:
                             state.trigger_timer.cancel()
@@ -1107,9 +1172,10 @@ def _gpio_monitor():
             time.sleep(0.05)
         except Exception as e:
             consecutive_errors += 1
-            print(f"WARNING: GPIO monitor error ({consecutive_errors}/{max_errors_before_reinit}): {e}")
+            logger.warning("GPIO monitor error (%d/%d): %s",
+                           consecutive_errors, max_errors_before_reinit, e)
             if consecutive_errors >= max_errors_before_reinit:
-                print("Attempting GPIO re-initialization...")
+                logger.info("Attempting GPIO re-initialization...")
                 state.gpio_ready = False
                 last_state = None
                 consecutive_errors = 0
@@ -1122,7 +1188,7 @@ def _cleanup():
         return
     _initialized = False
 
-    print("Shutting down DMX controller...")
+    logger.info("Shutting down DMX controller...")
     stop_dmx_refresh()
 
     with state.timer_lock:
@@ -1155,9 +1221,9 @@ def _cleanup():
             if GPIO_LIB == 'lgpio' and state.gpio_chip is not None:
                 lgpio.gpiochip_close(state.gpio_chip)
         except Exception as e:
-            print(f"WARNING: GPIO cleanup failed: {e}")
+            logger.warning("GPIO cleanup failed: %s", e)
 
-    print("Shutdown complete")
+    logger.info("Shutdown complete")
 
 
 def _initialize():
@@ -1166,15 +1232,14 @@ def _initialize():
         return
     _initialized = True
 
-    print("=" * 60)
-    print("DMX CONTROLLER - General Purpose")
-    print("=" * 60)
-    print()
+    logger.info("=" * 50)
+    logger.info("DMX CONTROLLER - General Purpose")
+    logger.info("=" * 50)
 
     load_config()
 
     if not init_enttec():
-        print("WARNING: ENTTEC not available at startup. Will keep retrying in the background.")
+        logger.warning("ENTTEC not available at startup. Will keep retrying in the background.")
 
     if config.ARTNET_ENABLED:
         init_artnet()
@@ -1197,20 +1262,18 @@ def _initialize():
     if config.ARTNET_ENABLED:
         outputs.append(f"Art-Net ({config.ARTNET_TARGET_IP} universe {config.ARTNET_UNIVERSE})")
 
-    print()
-    print("=" * 60)
-    print("System ready!")
-    print(f"   Visible channels: {config.VISIBLE_CHANNELS}")
-    print(f"   Output: {', '.join(outputs) if outputs else 'none configured'}")
-    print(f"   Scenes loaded: {len(config.SCENES)}")
-    print(f"   Web interface: http://0.0.0.0:5000")
+    logger.info("=" * 50)
+    logger.info("System ready!")
+    logger.info("  Visible channels: %d", config.VISIBLE_CHANNELS)
+    logger.info("  Output: %s", ', '.join(outputs) if outputs else 'none configured')
+    logger.info("  Scenes loaded: %d", len(config.SCENES))
+    logger.info("  Web interface: http://0.0.0.0:5000")
     if GPIO_AVAILABLE and state.gpio_ready:
-        print(f"   GPIO trigger pin {config.CONTACT_PIN} monitoring active")
-        print(f"   GPIO safety switch pin {config.SAFETY_SWITCH_PIN} monitoring active")
+        logger.info("  GPIO trigger pin %d monitoring active", config.CONTACT_PIN)
+        logger.info("  GPIO safety switch pin %d monitoring active", config.SAFETY_SWITCH_PIN)
     elif GPIO_AVAILABLE:
-        print("   GPIO available but init failed - monitor will retry automatically")
-    print("=" * 60)
-    print()
+        logger.info("  GPIO available but init failed - monitor will retry automatically")
+    logger.info("=" * 50)
 
 
 def _on_sigterm(_signum, _frame):
@@ -1225,7 +1288,7 @@ def main():
     try:
         app.run(host='0.0.0.0', port=5000, debug=False)
     except KeyboardInterrupt:
-        print("\nKeyboard interrupt received")
+        logger.info("Keyboard interrupt received")
 
 
 if __name__ == "__main__":
