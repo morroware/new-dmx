@@ -32,9 +32,11 @@ logger = logging.getLogger("dmx")
 
 try:
     from pyftdi.ftdi import Ftdi
+    from pyftdi.usbtools import UsbTools
     FTDI_AVAILABLE = True
 except Exception as ftdi_import_error:
     Ftdi = None
+    UsbTools = None
     FTDI_AVAILABLE = False
 import importlib
 import importlib.util
@@ -218,6 +220,7 @@ class SystemState:
 
     def __init__(self):
         self.ftdi_device = None
+        self.ftdi_lock = Lock()  # Protects ftdi_device open/close/use
         self.dmx_data = bytearray([0] * (config.DMX_CHANNELS + 1))
         self.dmx_lock = Lock()
         self.current_scene = None
@@ -318,8 +321,62 @@ def send_artnet_frame():
 # ENTTEC DMX Functions
 # ============================================
 
+def _flush_usb_cache():
+    """Flush pyftdi's internal USB device cache to force fresh enumeration.
+
+    After a USB disconnect, pyftdi's UsbTools keeps stale device handles
+    which cause 'No such device' errors even after the device is plugged
+    back in.  Flushing the cache forces a clean re-scan.
+    """
+    try:
+        if UsbTools is not None:
+            UsbTools.flush_cache()
+    except Exception:
+        pass
+    # Also release any lingering libusb references
+    try:
+        if UsbTools is not None:
+            UsbTools.release_all_devices()
+    except Exception:
+        pass
+
+
+def _disable_usb_autosuspend():
+    """Disable USB autosuspend for FTDI devices to prevent kernel-level disconnects.
+
+    The Linux kernel can put USB devices into suspend mode to save power,
+    which causes 'No such device' errors for devices that need continuous
+    communication like DMX controllers.
+    """
+    try:
+        for power_dir in glob.glob("/sys/bus/usb/devices/*/power"):
+            try:
+                idVendor_path = os.path.join(os.path.dirname(power_dir), "idVendor")
+                if not os.path.exists(idVendor_path):
+                    continue
+                with open(idVendor_path) as f:
+                    vid = f.read().strip()
+                if vid != "0403":  # FTDI vendor ID
+                    continue
+                control_path = os.path.join(power_dir, "control")
+                if os.path.exists(control_path):
+                    with open(control_path, 'w') as f:
+                        f.write("on")
+                autosuspend_path = os.path.join(power_dir, "autosuspend_delay_ms")
+                if os.path.exists(autosuspend_path):
+                    with open(autosuspend_path, 'w') as f:
+                        f.write("-1")
+            except (PermissionError, OSError):
+                pass  # May not have write access; not fatal
+    except Exception:
+        pass
+
+
 def init_enttec():
-    """Initialize ENTTEC Open DMX USB"""
+    """Initialize ENTTEC Open DMX USB.
+
+    Caller must hold state.ftdi_lock.
+    """
     if not FTDI_AVAILABLE:
         state.enttec_last_error = f"pyftdi unavailable: {ftdi_import_error}"
         logger.error("%s", state.enttec_last_error)
@@ -342,11 +399,14 @@ def init_enttec():
         return list(dict.fromkeys(urls))
 
     try:
+        # Flush stale USB handles before scanning
+        _flush_usb_cache()
+
         logger.info("Initializing ENTTEC Open DMX USB...")
         devices = Ftdi.list_devices()
         if not devices:
-            logger.warning("No FTDI devices found (ENTTEC not connected)")
             state.enttec_last_error = "No FTDI devices found"
+            logger.debug("No FTDI devices found (ENTTEC not connected)")
             return False
 
         logger.info("Found %d FTDI device(s)", len(devices))
@@ -394,6 +454,9 @@ def init_enttec():
         except Exception:
             pass  # Not all pyftdi versions expose usb_dev
 
+        # Disable USB autosuspend for FTDI devices
+        _disable_usb_autosuspend()
+
         logger.info("ENTTEC initialized successfully")
         return True
 
@@ -404,19 +467,24 @@ def init_enttec():
 
 
 def reinit_enttec():
-    """Attempt to re-initialize the ENTTEC after a failure"""
-    try:
-        if state.ftdi_device:
-            try:
-                state.ftdi_device.close()
-            except Exception:
-                pass
-            state.ftdi_device = None
-            state.enttec_url = None
-        return init_enttec()
-    except Exception as e:
-        logger.error("Error re-initializing ENTTEC: %s", e)
-        return False
+    """Safely close and re-initialize the ENTTEC.
+
+    Uses ftdi_lock to prevent the refresh thread from using a
+    half-closed device.
+    """
+    with state.ftdi_lock:
+        try:
+            if state.ftdi_device:
+                try:
+                    state.ftdi_device.close()
+                except Exception:
+                    pass
+                state.ftdi_device = None
+                state.enttec_url = None
+            return init_enttec()
+        except Exception as e:
+            logger.error("Error re-initializing ENTTEC: %s", e)
+            return False
 
 
 def dmx_refresh_thread():
@@ -427,43 +495,49 @@ def dmx_refresh_thread():
     REINIT_BACKOFF_BASE = 2.0
     offline_backoff = 1.0
     offline_backoff_max = 10.0
+    _last_reinit_log = 0  # Throttle repetitive log messages
 
     logger.info("DMX refresh thread started (%d Hz)", config.DMX_REFRESH_RATE)
 
     while state.dmx_running:
         try:
-            if state.ftdi_device is not None:
-                # Snapshot DMX data under lock (fast), then send outside lock
-                # so API calls aren't blocked during USB I/O and break timing
-                with state.dmx_lock:
-                    frame = bytes(state.dmx_data)
+            # Hold the ftdi_lock during the entire send so reinit_enttec()
+            # cannot close the device mid-write.
+            with state.ftdi_lock:
+                device = state.ftdi_device
+                if device is not None:
+                    # Snapshot DMX data under lock (fast)
+                    with state.dmx_lock:
+                        frame = bytes(state.dmx_data)
 
-                # DMX512 break + MAB + data — done outside the lock
-                state.ftdi_device.set_break(True)
-                time.sleep(0.000088)  # break: 88µs minimum
-                state.ftdi_device.set_break(False)
-                time.sleep(0.000008)  # MAB: 8µs minimum
-                state.ftdi_device.write_data(frame)
+                    # DMX512 break + MAB + data
+                    device.set_break(True)
+                    time.sleep(0.000088)  # break: 88µs minimum
+                    device.set_break(False)
+                    time.sleep(0.000008)  # MAB: 8µs minimum
+                    device.write_data(frame)
 
-                consecutive_errors = 0
-                offline_backoff = 1.0
+                    consecutive_errors = 0
+                    offline_backoff = 1.0
         except Exception as e:
             consecutive_errors += 1
             if consecutive_errors <= MAX_ERRORS_BEFORE_REINIT:
-                logger.warning("DMX refresh error (%d/%d): %s",
+                logger.warning("DMX write error (%d/%d): %s",
                                consecutive_errors, MAX_ERRORS_BEFORE_REINIT, e)
                 time.sleep(0.1)
             else:
-                # Exponential backoff on re-init attempts
-                backoff = min(REINIT_BACKOFF_BASE * (2 ** (consecutive_errors - MAX_ERRORS_BEFORE_REINIT - 1)), 30.0)
-                logger.error("%d consecutive DMX failures. Re-init in %.1fs...",
-                             consecutive_errors, backoff)
+                # Exponential backoff on re-init attempts, cap at 10s
+                backoff = min(REINIT_BACKOFF_BASE * (2 ** (consecutive_errors - MAX_ERRORS_BEFORE_REINIT - 1)), 10.0)
+                now = time.monotonic()
+                # Throttle log spam: only log every 30s after initial burst
+                if consecutive_errors <= MAX_ERRORS_BEFORE_REINIT + 3 or now - _last_reinit_log > 30:
+                    logger.warning("ENTTEC disconnected (%d failures). Retrying in %.1fs...",
+                                   consecutive_errors, backoff)
+                    _last_reinit_log = now
                 time.sleep(backoff)
                 if reinit_enttec():
                     logger.info("ENTTEC re-initialized successfully, resuming DMX output")
                     consecutive_errors = 0
-                else:
-                    logger.warning("ENTTEC re-init failed. Will retry.")
 
         # Always send Art-Net if enabled, regardless of ENTTEC status
         if config.ARTNET_ENABLED:
@@ -1209,13 +1283,14 @@ def _cleanup():
         if state.trigger_timer:
             state.trigger_timer.cancel()
 
-    if state.ftdi_device:
-        try:
-            state.ftdi_device.close()
-        except Exception:
-            pass
-    state.ftdi_device = None
-    state.enttec_url = None
+    with state.ftdi_lock:
+        if state.ftdi_device:
+            try:
+                state.ftdi_device.close()
+            except Exception:
+                pass
+        state.ftdi_device = None
+        state.enttec_url = None
 
     if state.artnet_socket:
         try:
@@ -1252,8 +1327,9 @@ def _initialize():
 
     load_config()
 
-    if not init_enttec():
-        logger.warning("ENTTEC not available at startup. Will keep retrying in the background.")
+    with state.ftdi_lock:
+        if not init_enttec():
+            logger.warning("ENTTEC not available at startup. Will keep retrying in the background.")
 
     if config.ARTNET_ENABLED:
         init_artnet()
