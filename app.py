@@ -384,7 +384,15 @@ def init_enttec():
         # Configure for DMX512
         state.ftdi_device.set_baudrate(250000)
         state.ftdi_device.set_line_property(8, 2, 'N')
-        state.ftdi_device.set_latency_timer(1)
+        state.ftdi_device.set_latency_timer(2)  # 2ms latency (1ms can cause USB timeouts)
+
+        # Set USB write timeout to prevent hangs on stale connections
+        try:
+            usb_dev = state.ftdi_device.usb_dev
+            if usb_dev is not None:
+                usb_dev.default_timeout = 1000  # 1 second USB timeout
+        except Exception:
+            pass  # Not all pyftdi versions expose usb_dev
 
         logger.info("ENTTEC initialized successfully")
         return True
@@ -416,23 +424,27 @@ def dmx_refresh_thread():
     refresh_interval = 1.0 / config.DMX_REFRESH_RATE
     consecutive_errors = 0
     MAX_ERRORS_BEFORE_REINIT = 3
-    REINIT_BACKOFF = 2.0
+    REINIT_BACKOFF_BASE = 2.0
     offline_backoff = 1.0
     offline_backoff_max = 10.0
 
     logger.info("DMX refresh thread started (%d Hz)", config.DMX_REFRESH_RATE)
 
     while state.dmx_running:
-        enttec_ok = False
         try:
             if state.ftdi_device is not None:
+                # Snapshot DMX data under lock (fast), then send outside lock
+                # so API calls aren't blocked during USB I/O and break timing
                 with state.dmx_lock:
-                    state.ftdi_device.set_break(True)
-                    time.sleep(0.000088)
-                    state.ftdi_device.set_break(False)
-                    time.sleep(0.000008)
-                    state.ftdi_device.write_data(state.dmx_data)
-                enttec_ok = True
+                    frame = bytes(state.dmx_data)
+
+                # DMX512 break + MAB + data — done outside the lock
+                state.ftdi_device.set_break(True)
+                time.sleep(0.000088)  # break: 88µs minimum
+                state.ftdi_device.set_break(False)
+                time.sleep(0.000008)  # MAB: 8µs minimum
+                state.ftdi_device.write_data(frame)
+
                 consecutive_errors = 0
                 offline_backoff = 1.0
         except Exception as e:
@@ -442,14 +454,16 @@ def dmx_refresh_thread():
                                consecutive_errors, MAX_ERRORS_BEFORE_REINIT, e)
                 time.sleep(0.1)
             else:
-                logger.error("%d consecutive DMX failures. Attempting ENTTEC re-init...",
-                             consecutive_errors)
-                time.sleep(REINIT_BACKOFF)
+                # Exponential backoff on re-init attempts
+                backoff = min(REINIT_BACKOFF_BASE * (2 ** (consecutive_errors - MAX_ERRORS_BEFORE_REINIT - 1)), 30.0)
+                logger.error("%d consecutive DMX failures. Re-init in %.1fs...",
+                             consecutive_errors, backoff)
+                time.sleep(backoff)
                 if reinit_enttec():
                     logger.info("ENTTEC re-initialized successfully, resuming DMX output")
                     consecutive_errors = 0
                 else:
-                    logger.warning("ENTTEC re-init failed. Retrying in %.1fs...", REINIT_BACKOFF)
+                    logger.warning("ENTTEC re-init failed. Will retry.")
 
         # Always send Art-Net if enabled, regardless of ENTTEC status
         if config.ARTNET_ENABLED:
