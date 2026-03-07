@@ -363,6 +363,33 @@
                 <button class="btn-primary btn-sm" style="margin-top: 12px;" onclick="saveArtnetConfig()">Save Art-Net Settings</button>
 
                 <div style="margin-top: 25px; padding-top: 20px; border-top: 1px solid #2a2a3a;">
+                    <h2>Fixture Profile</h2>
+                    <p style="color: #71717a; font-size: 13px; margin-bottom: 12px;">
+                        Apply a fixture profile to auto-configure channel labels for your light. This replaces existing labels.
+                    </p>
+                    <div class="grid-2">
+                        <div class="form-group">
+                            <label>Fixture Type</label>
+                            <select id="fixture-profile-select">
+                                <option value="">-- Select Fixture --</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>DMX Start Address</label>
+                            <input type="number" id="fixture-start-address" min="1" max="512" value="1">
+                        </div>
+                        <div class="form-group">
+                            <label>Number of Fixtures</label>
+                            <input type="number" id="fixture-count" min="1" max="170" value="1">
+                        </div>
+                        <div class="form-group" style="display: flex; align-items: flex-end;">
+                            <button class="btn-primary btn-sm" onclick="applyFixtureProfile()">Apply Profile</button>
+                        </div>
+                    </div>
+                    <div id="fixture-profile-preview" style="color: #a1a1aa; font-size: 12px; margin-top: 8px;"></div>
+                </div>
+
+                <div style="margin-top: 25px; padding-top: 20px; border-top: 1px solid #2a2a3a;">
                     <h2>Channel Labels</h2>
                     <p style="color: #71717a; font-size: 13px; margin-bottom: 12px;">
                         Click any channel label in the Channels tab to rename it. Labels are saved automatically.
@@ -957,11 +984,85 @@
     }
 
     // ============================================
+    // Fixture Profiles
+    // ============================================
+    let fixtureProfiles = {};
+
+    function loadFixtureProfiles() {
+        fetch('/api/fixture-profiles', {headers})
+            .then(r => r.json())
+            .then(data => {
+                fixtureProfiles = data;
+                const select = document.getElementById('fixture-profile-select');
+                select.innerHTML = '<option value="">-- Select Fixture --</option>';
+                // Group by manufacturer
+                const byMfg = {};
+                for (const [pid, profile] of Object.entries(data)) {
+                    const mfg = profile.manufacturer || 'Other';
+                    if (!byMfg[mfg]) byMfg[mfg] = [];
+                    byMfg[mfg].push({id: pid, ...profile});
+                }
+                for (const [mfg, profiles] of Object.entries(byMfg)) {
+                    const group = document.createElement('optgroup');
+                    group.label = mfg;
+                    for (const p of profiles) {
+                        const opt = document.createElement('option');
+                        opt.value = p.id;
+                        opt.textContent = p.name;
+                        group.appendChild(opt);
+                    }
+                    select.appendChild(group);
+                }
+                select.addEventListener('change', previewFixtureProfile);
+            })
+            .catch(console.error);
+    }
+
+    function previewFixtureProfile() {
+        const pid = document.getElementById('fixture-profile-select').value;
+        const preview = document.getElementById('fixture-profile-preview');
+        if (!pid || !fixtureProfiles[pid]) {
+            preview.textContent = '';
+            return;
+        }
+        const profile = fixtureProfiles[pid];
+        const channels = Object.entries(profile.channel_map)
+            .sort((a, b) => parseInt(a[0]) - parseInt(b[0]))
+            .map(([offset, label]) => `Ch${offset}: ${label}`)
+            .join(', ');
+        preview.textContent = `${profile.channels_per_fixture} channels per fixture: ${channels}`;
+    }
+
+    function applyFixtureProfile() {
+        const pid = document.getElementById('fixture-profile-select').value;
+        if (!pid) { showToast('Select a fixture profile first', true); return; }
+        const startAddr = parseInt(document.getElementById('fixture-start-address').value) || 1;
+        const count = parseInt(document.getElementById('fixture-count').value) || 1;
+
+        fetch('/api/fixture-profiles/apply', {
+            method: 'POST', headers,
+            body: JSON.stringify({profile_id: pid, start_address: startAddr, fixture_count: count})
+        })
+        .then(r => r.json().then(d => ({ok: r.ok, data: d})))
+        .then(({ok, data}) => {
+            if (!ok) throw new Error(data.error || 'Failed');
+            showToast(`Applied: ${data.profile}`);
+            if (data.channel_labels) channelLabels = data.channel_labels;
+            if (data.visible_channels) visibleChannels = data.visible_channels;
+            renderChannels();
+            updateLabelDisplays();
+            updateStatus();
+        })
+        .catch(err => showToast(err.message, true));
+    }
+
+    // ============================================
     // Initial Load
     // ============================================
     function initialLoad() {
         // Fetch scenes first, then status
         loadScenes();
+        loadFixtureProfiles();
 
         fetch('/api/config', {headers})
             .then(r => r.json())

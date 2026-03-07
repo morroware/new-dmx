@@ -1337,6 +1337,138 @@ def api_set_channel_labels():
     return jsonify({'success': True, 'labels': {str(k): v for k, v in config.CHANNEL_LABELS.items()}})
 
 # ============================================
+# Fixture Profiles
+# ============================================
+
+FIXTURE_PROFILES = {
+    'stadium-pro-3-rgb': {
+        'name': 'Stadium Pro III - RGB (3ch)',
+        'manufacturer': 'RuggedGrade',
+        'channels_per_fixture': 3,
+        'channel_map': {
+            1: 'Red',
+            2: 'Green',
+            3: 'Blue',
+        },
+    },
+    'stadium-pro-3-rgbw': {
+        'name': 'Stadium Pro III - RGBW (4ch)',
+        'manufacturer': 'RuggedGrade',
+        'channels_per_fixture': 4,
+        'channel_map': {
+            1: 'Red',
+            2: 'Green',
+            3: 'Blue',
+            4: 'White',
+        },
+    },
+    'generic-rgb': {
+        'name': 'Generic RGB (3ch)',
+        'manufacturer': 'Generic',
+        'channels_per_fixture': 3,
+        'channel_map': {
+            1: 'Red',
+            2: 'Green',
+            3: 'Blue',
+        },
+    },
+    'generic-rgbw': {
+        'name': 'Generic RGBW (4ch)',
+        'manufacturer': 'Generic',
+        'channels_per_fixture': 4,
+        'channel_map': {
+            1: 'Red',
+            2: 'Green',
+            3: 'Blue',
+            4: 'White',
+        },
+    },
+    'generic-drgbw': {
+        'name': 'Generic Dimmer+RGBW (5ch)',
+        'manufacturer': 'Generic',
+        'channels_per_fixture': 5,
+        'channel_map': {
+            1: 'Dimmer',
+            2: 'Red',
+            3: 'Green',
+            4: 'Blue',
+            5: 'White',
+        },
+    },
+    'generic-drgb': {
+        'name': 'Generic Dimmer+RGB (4ch)',
+        'manufacturer': 'Generic',
+        'channels_per_fixture': 4,
+        'channel_map': {
+            1: 'Dimmer',
+            2: 'Red',
+            3: 'Green',
+            4: 'Blue',
+        },
+    },
+}
+
+
+@app.route('/api/fixture-profiles', methods=['GET'])
+def api_list_fixture_profiles():
+    """List available fixture profiles"""
+    profiles = {}
+    for pid, profile in FIXTURE_PROFILES.items():
+        profiles[pid] = {
+            'name': profile['name'],
+            'manufacturer': profile['manufacturer'],
+            'channels_per_fixture': profile['channels_per_fixture'],
+            'channel_map': {str(k): v for k, v in profile['channel_map'].items()},
+        }
+    return jsonify(profiles)
+
+
+@app.route('/api/fixture-profiles/apply', methods=['POST'])
+def api_apply_fixture_profile():
+    """Apply a fixture profile: sets channel labels and visible channel count"""
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict) or 'profile_id' not in data:
+        return jsonify({'error': 'Missing profile_id'}), 400
+
+    profile_id = data['profile_id']
+    if profile_id not in FIXTURE_PROFILES:
+        return jsonify({'error': f'Unknown profile: {profile_id}'}), 404
+
+    profile = FIXTURE_PROFILES[profile_id]
+    start_address = max(1, min(512, int(data.get('start_address', 1))))
+    fixture_count = max(1, int(data.get('fixture_count', 1)))
+    channels_per_fixture = profile['channels_per_fixture']
+
+    # Clear existing labels
+    config.CHANNEL_LABELS = {}
+
+    # Apply labels for each fixture
+    for fixture_idx in range(fixture_count):
+        base = start_address + (fixture_idx * channels_per_fixture)
+        for offset, label in profile['channel_map'].items():
+            ch = base + (offset - 1)
+            if ch > 512:
+                break
+            if fixture_count > 1:
+                config.CHANNEL_LABELS[ch] = f'F{fixture_idx + 1} {label}'
+            else:
+                config.CHANNEL_LABELS[ch] = label
+
+    # Set visible channels to cover all fixtures
+    total_channels = start_address - 1 + (fixture_count * channels_per_fixture)
+    config.VISIBLE_CHANNELS = max(config.VISIBLE_CHANNELS, min(512, total_channels))
+
+    save_config()
+    logger.info("Applied fixture profile '%s' (%d fixture(s) starting at ch %d)",
+                profile['name'], fixture_count, start_address)
+    return jsonify({
+        'success': True,
+        'profile': profile['name'],
+        'visible_channels': config.VISIBLE_CHANNELS,
+        'channel_labels': {str(k): v for k, v in config.CHANNEL_LABELS.items()},
+    })
+
+# ============================================
 # Health Check
 # ============================================
 
