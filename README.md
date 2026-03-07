@@ -9,6 +9,7 @@ A Python-based DMX512 controller with a web interface for testing and controllin
 - **Custom Channel Labels** - Name each channel (e.g. "Dimmer", "Red", "Strobe") for any fixture
 - **Unlimited Scenes** - Create, name, save, recall, and delete as many scenes as you need
 - **Art-Net Output** - Send DMX data over the network (UDP broadcast or unicast) alongside or instead of USB
+- **Art-Net Receiver** - Listen for incoming Art-Net and output via ENTTEC USB (Pi-to-Pi bridging)
 - **ENTTEC USB** - Direct DMX512 output via ENTTEC Open DMX USB (FTDI-based)
 - **Trigger System** - Configurable trigger scene + idle scene with adjustable duration timer
 - **GPIO Support** - Optional contact closure trigger (pin 17) and safety switch (pin 27) on Raspberry Pi
@@ -97,28 +98,66 @@ pip install -r requirements.txt
 
 ### Settings Tab
 
-- **Art-Net** — enable/disable, set target IP (broadcast or unicast), and universe number
+- **Art-Net Mode** — select Disabled, Sender, or Receiver mode
 - **Channel Labels** — managed from the Channels tab (click to rename)
 - **GPIO** — shows pin assignments and current contact/safety state
 
 ## Art-Net
 
-Art-Net sends DMX data as UDP packets (port 6454). To enable:
+Art-Net uses UDP packets on port 6454. The controller supports three modes, selectable from the **Settings** tab:
 
-1. Go to the **Settings** tab in the web UI
-2. Check **Enable Art-Net Output**
-3. Set the **Target IP** (use `255.255.255.255` for broadcast, or a specific node IP)
-4. Set the **Universe** number
-5. Click **Save Art-Net Settings**
+| Mode | Description |
+|------|-------------|
+| **Disabled** | No Art-Net activity (default) |
+| **Sender** | Sends DMX data as Art-Net packets to a target IP |
+| **Receiver** | Listens for incoming Art-Net packets and outputs via ENTTEC USB |
 
-Art-Net runs alongside ENTTEC USB — you can use both simultaneously, or either alone.
+Sender and Receiver are mutually exclusive — enabling one disables the other.
 
-Environment variable overrides:
+### Art-Net Sender
+
+Sends your DMX channel values over the network to Art-Net nodes or software.
+
+1. Go to **Settings** > **Art-Net Mode** > select **Sender**
+2. Set the **Target IP** (use `255.255.255.255` for broadcast, or a specific node IP)
+3. Set the **Universe** number
+4. Click **Save Art-Net Settings**
+
+Art-Net Sender runs alongside ENTTEC USB — you can use both simultaneously, or either alone.
+
+### Art-Net Receiver
+
+Listens for incoming Art-Net DMX packets and outputs the received data via the ENTTEC USB adapter. This is ideal for **Pi-to-Pi bridging** — one Pi runs the controller UI and sends Art-Net, a second Pi receives it and drives fixtures over USB.
+
+1. Go to **Settings** > **Art-Net Mode** > select **Receiver**
+2. Set the **Listen Universe** number (must match the sender's universe)
+3. Click **Save Art-Net Settings**
+
+In receiver mode:
+- The channel sliders show incoming Art-Net values in real-time
+- The status bar shows **RECV** with packet count and last-seen timing
+- The ENTTEC USB output continuously sends received data to fixtures at 44Hz
+
+#### Example: Pi-to-Pi Setup
+
+```
+Pi #1 (Controller)                    Pi #2 (Output Node)
+┌─────────────────┐                  ┌─────────────────┐
+│ Web UI + Scenes  │  ── Art-Net ──> │ Art-Net Receiver │
+│ Mode: Sender     │    (UDP 6454)   │ Mode: Receiver   │
+│ Target: Pi2 IP   │                 │ ENTTEC USB ──> Fixtures
+└─────────────────┘                  └─────────────────┘
+```
+
+Both Pis run the same `app.py`. Pi #1 has Sender mode targeting Pi #2's IP address. Pi #2 has Receiver mode with ENTTEC USB connected to DMX fixtures.
+
+### Environment Variables
 
 ```bash
-DMX_ARTNET_ENABLED=true
-DMX_ARTNET_TARGET_IP=192.168.1.100
-DMX_ARTNET_UNIVERSE=0
+DMX_ARTNET_ENABLED=true              # Enable sender mode
+DMX_ARTNET_TARGET_IP=192.168.1.100   # Sender target IP
+DMX_ARTNET_UNIVERSE=0                # Universe (sender and receiver)
+DMX_ARTNET_RECEIVER=true             # Enable receiver mode
 ```
 
 ## Configuration
@@ -129,9 +168,10 @@ All configuration is persisted to `/var/lib/dmx/config.json` and survives reboot
 |----------|---------|-------------|
 | `DMX_CONFIG_DIR` | `/var/lib/dmx` | Config file directory |
 | `DMX_FTDI_URL` | `ftdi://0403:6001/1` | FTDI device URL |
-| `DMX_ARTNET_ENABLED` | `false` | Enable Art-Net output |
-| `DMX_ARTNET_TARGET_IP` | `255.255.255.255` | Art-Net target IP |
-| `DMX_ARTNET_UNIVERSE` | `0` | Art-Net universe |
+| `DMX_ARTNET_ENABLED` | `false` | Enable Art-Net sender |
+| `DMX_ARTNET_TARGET_IP` | `255.255.255.255` | Art-Net sender target IP |
+| `DMX_ARTNET_UNIVERSE` | `0` | Art-Net universe (sender and receiver) |
+| `DMX_ARTNET_RECEIVER` | `false` | Enable Art-Net receiver mode |
 
 ## API Endpoints
 
