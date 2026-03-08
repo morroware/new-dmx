@@ -70,6 +70,31 @@ Existing configuration and scenes are preserved.
 sudo ./uninstall.sh
 ```
 
+### Wipe Existing Install and Clone Fresh
+
+If you want a completely fresh install (instead of preserving config):
+
+```bash
+# 1) Remove system install/service
+cd ~/new-dmx
+sudo ./uninstall.sh
+
+# 2) Remove old repo checkout
+cd ~
+rm -rf ~/new-dmx
+
+# 3) Clone fresh and install
+git clone <your-repo-url> ~/new-dmx
+cd ~/new-dmx
+sudo ./install.sh
+```
+
+Optional: also remove saved scenes/config before reinstalling:
+
+```bash
+sudo rm -rf /var/lib/dmx
+```
+
 ## Manual Start (Development)
 
 ```bash
