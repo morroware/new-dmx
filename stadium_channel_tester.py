@@ -234,21 +234,73 @@ def colour_combo_test(session, base_url, start_ch):
 
 # ── Auto channel scan ─────────────────────────────────────────────────────────
 
-def auto_scan(session, base_url, start_ch, num_channels, flash_val=200, on_time=0.8, off_time=0.4):
+COLOR_SHORTHANDS = {
+    "r": "Red", "g": "Green", "b": "Blue", "w": "White",
+    "a": "Amber", "uv": "UV", "s": "Strobe", "d": "Dimmer",
+    "m": "Master", "p": "Program", "sp": "Speed",
+}
+
+def auto_scan(session, base_url, start_ch, num_channels, sess_channels):
     """
-    Flash each channel in sequence so you can quickly note which channels
-    produce visible effects.  All others are kept at 0.
+    Light each channel one at a time and ask: fixture number + color.
+    Builds a mapping you can push to the server with 'A'.
     """
-    header(f"Auto-scan: channels {start_ch} → {start_ch + num_channels - 1}")
-    print(c("  Each channel will flash at 200 briefly.", DIM))
-    print(c("  Note which ones do something interesting.", DIM))
-    print()
-    for ch in range(start_ch, start_ch + num_channels):
-        print(c(f"  Channel {ch:>3}", BOLD), end="  ", flush=True)
-        flash_channel(session, base_url, ch, flash_val, on_time, off_time)
-        print(c("done", DIM))
+    header(f"Mapping scan: channels {start_ch} → {start_ch + num_channels - 1}")
+    print(c("  Channel lights up at 255. Type what you see, then Enter.", DIM))
+    print(c("  Format:  <fixture#> <color>   e.g.  1 red   2 w   3 blue", DIM))
+    print(c("  Shortcuts: r=Red  g=Green  b=Blue  w=White  a=Amber  uv=UV", DIM))
+    print(c("             s=Strobe  d=Dimmer  m=Master  p=Program  sp=Speed", DIM))
+    print(c("  skip/s = no label   back/b = go back   done/q = stop early\n", DIM))
+
+    ch_list = list(range(start_ch, start_ch + num_channels))
+    i = 0
+    while i < len(ch_list):
+        ch = ch_list[i]
+        existing = sess_channels.get(str(ch), {}).get("label", "")
+
+        api_test_channel(session, base_url, ch, 255)
+
+        hint = c(f" [{existing}]", YELLOW) if existing else ""
+        try:
+            raw = input(c(f"  ch {ch:>3}", BOLD + CYAN) + hint + c(" → ", CYAN)).strip()
+        except (KeyboardInterrupt, EOFError):
+            print()
+            break
+
+        if raw in ("done", "q"):
+            break
+
+        if raw in ("back", "b"):
+            if i > 0:
+                i -= 1
+            else:
+                warn("Already at first channel.")
+            continue
+
+        if raw in ("skip", "s", ""):
+            i += 1
+            continue
+
+        # parse "<fixture_num> <color>" or freeform
+        parts = raw.split(None, 1)
+        if len(parts) == 2 and parts[0].isdigit():
+            fixture = parts[0]
+            color_in = parts[1].lower()
+            color = COLOR_SHORTHANDS.get(color_in, color_in.title())
+            label = f"F{fixture} {color}"
+        elif len(parts) == 1 and parts[0].isdigit():
+            label = f"F{parts[0]}"
+        else:
+            # freeform
+            words = raw.lower().split()
+            label = " ".join(COLOR_SHORTHANDS.get(w, w.title()) for w in words)
+
+        sess_channels[str(ch)] = {"label": label}
+        ok(f"ch {ch} → {label}")
+        i += 1
+
     api_blackout(session, base_url)
-    ok("Auto-scan complete")
+    ok("Mapping scan complete – blacked out")
 
 
 # ── Session data management ───────────────────────────────────────────────────
@@ -380,7 +432,7 @@ MENU = f"""
   {c('s', CYAN)}  sweep channel 0→255→0          {c('v', CYAN)}  set channel to specific value
   {c('n', CYAN)}  next channel                    {c('p', CYAN)}  previous channel
   {c('g', CYAN)}  jump to channel #               {c('b', CYAN)}  blackout all channels
-  {c('r', CYAN)}  auto-scan (flash each channel)  {c('c', CYAN)}  colour-combo quick test
+  {c('r', CYAN)}  mapping scan (label each ch)    {c('c', CYAN)}  colour-combo quick test
   {c('e', CYAN)}  effect band step-through        {c('l', CYAN)}  label / annotate channel
   {c('k', CYAN)}  pick label from common list     {c('d', CYAN)}  dump session to terminal
   {c('S', CYAN)}  save session to JSON file       {c('L', CYAN)}  load session from JSON
@@ -473,11 +525,11 @@ def run_interactive(args, base_url, http_session, sess):
         # ── auto scan ─────────────────────────────────────────────────
         elif cmd0 == "r":
             try:
-                confirm = input(c(f"    Scan channels {args.start_ch}–{args.start_ch+args.channels-1}? [y/N]: ", YELLOW)).strip().lower()
+                confirm = input(c(f"    Map channels {args.start_ch}–{args.start_ch+args.channels-1}? [y/N]: ", YELLOW)).strip().lower()
             except EOFError:
                 confirm = "n"
             if confirm == "y":
-                auto_scan(http_session, base_url, args.start_ch, args.channels)
+                auto_scan(http_session, base_url, args.start_ch, args.channels, sess["channels"])
 
         # ── colour combo ─────────────────────────────────────────────
         elif cmd0 == "c":
@@ -593,7 +645,7 @@ def main():
             warn(f"Could not load {args.session_file}: {exc}  – starting fresh.")
 
     if args.auto_scan:
-        auto_scan(http_session, base_url, args.start_ch, args.channels)
+        auto_scan(http_session, base_url, args.start_ch, args.channels, sess["channels"])
 
     run_interactive(args, base_url, http_session, sess)
 
