@@ -102,6 +102,25 @@ pip install -r requirements.txt
 - **Channel Labels** — managed from the Channels tab (click to rename)
 - **GPIO** — shows pin assignments and current contact/safety state
 
+### Stadium Pro III 1200W RGBW Setup (Recommended)
+
+If DMX channels feel "off" (for example, color sliders trigger strobe/macro), the fixture and controller are in different DMX personalities.
+
+1. On the fixture display, set **DMX mode/personality** first (4ch, 5ch, 6ch, 7ch, 8ch, 8ch Alt, or 9ch).
+2. In the web UI, open **Settings → Fixture Profiles**.
+3. Pick the matching **Stadium Pro III - RGBW** profile and apply it with your fixture count + start address.
+4. If uncertain, use **DMX Channel Tester** to identify what channel 1 does, then select the profile that matches.
+
+Included Stadium Pro III RGBW maps:
+- 4ch: `R, G, B, W`
+- 5ch: `Dim, R, G, B, W`
+- 6ch: `Dim, Strobe, R, G, B, W`
+- 7ch: `Dim, Strobe, Macro, R, G, B, W`
+- 8ch: `Dim, R, G, B, W, Strobe, Mode, Speed`
+- 8ch Alt: `Mode, Dim, R, G, B, W, Strobe, Speed`
+- 9ch: `Dim, R, G, B, W, Strobe, Macro, Speed, Mode`
+
+
 ## Art-Net
 
 Art-Net uses UDP packets on port 6454. The controller supports three modes, selectable from the **Settings** tab:
