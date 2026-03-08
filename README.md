@@ -70,6 +70,31 @@ Existing configuration and scenes are preserved.
 sudo ./uninstall.sh
 ```
 
+### Wipe Existing Install and Clone Fresh
+
+If you want a completely fresh install (instead of preserving config):
+
+```bash
+# 1) Remove system install/service
+cd ~/new-dmx
+sudo ./uninstall.sh
+
+# 2) Remove old repo checkout
+cd ~
+rm -rf ~/new-dmx
+
+# 3) Clone fresh and install
+git clone <your-repo-url> ~/new-dmx
+cd ~/new-dmx
+sudo ./install.sh
+```
+
+Optional: also remove saved scenes/config before reinstalling:
+
+```bash
+sudo rm -rf /var/lib/dmx
+```
+
 ## Manual Start (Development)
 
 ```bash
@@ -101,6 +126,19 @@ pip install -r requirements.txt
 - **Art-Net Mode** — select Disabled, Sender, or Receiver mode
 - **Channel Labels** — managed from the Channels tab (click to rename)
 - **GPIO** — shows pin assignments and current contact/safety state
+
+### Stadium Pro III 1200W RGBW Setup (Verified in this project)
+
+For the Stadium Pro III 1200W RGBW tested with this controller, the working profile is:
+
+- `7ch`: `Dimmer, Strobe, Color Macro, Red, Green, Blue, White`
+
+If DMX channels feel "off" (for example, color sliders trigger strobe/macro), the fixture and controller are in different DMX personalities.
+
+1. On the fixture display, set DMX personality to **7ch**.
+2. In the web UI, open **Settings → Fixture Profiles** and apply **Stadium Pro III - RGBW (7ch: Dim/Strobe/Macro/R/G/B/W)**.
+3. If behavior still mismatches, run **DMX Channel Tester** to verify the fixture's real mapping channel-by-channel.
+
 
 ## Art-Net
 
@@ -215,6 +253,23 @@ sudo journalctl -u dmx -f
 | `/etc/dmx/dmx.env` | Environment variables |
 
 ## Troubleshooting
+
+### Git pull fails with "detected dubious ownership"
+
+If `git pull` shows:
+
+```
+fatal: detected dubious ownership in repository at '/home/tech/new-dmx'
+```
+
+mark the repo path as safe for your user, then pull again:
+
+```bash
+git config --global --add safe.directory /home/tech/new-dmx
+git pull
+```
+
+If your repo is in a different path, replace `/home/tech/new-dmx` with that exact path.
 
 ### ENTTEC not detected
 
