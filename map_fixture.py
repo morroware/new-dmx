@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-DMX Fixture Mapper – simple channel-by-channel labeller
+DMX Fixture Mapper
 Lights one channel at 255 (all others off), you type what you see, repeat.
 
 Usage:
@@ -8,34 +8,51 @@ Usage:
     python3 map_fixture.py --host 192.168.1.50 --start 5 --count 60
 
 At each prompt:
-    Type label and Enter  → save label and go to next channel
-    Enter (blank)         → skip this channel
+    Type label and Enter  → save and advance
+    Enter (blank)         → skip
     b                     → go back one channel
     q                     → quit and save
 """
 
-import argparse, json, sys, time
+import argparse, json, sys, time, requests
 from datetime import datetime
 
-try:
-    import requests
-except ImportError:
-    sys.exit("pip install requests")
-
-def flash(host, port, ch):
-    """Zero all channels, set ch to 255. Same call the sweep uses."""
-    r = requests.post(f"http://{host}:{port}/api/test-channel",
-                      json={"channel": ch, "value": 255}, timeout=5)
+def test_channel(host, port, ch, value=255):
+    r = requests.post(
+        f"http://{host}:{port}/api/test-channel",
+        json={"channel": ch, "value": value},
+        timeout=5,
+    )
     r.raise_for_status()
+    return r.json()
 
 def blackout(host, port):
     requests.post(f"http://{host}:{port}/api/blackout", timeout=5)
 
 def push_labels(host, port, labels):
-    r = requests.post(f"http://{host}:{port}/api/channel-labels",
-                      json={"labels": {str(k): v for k, v in labels.items()}},
-                      timeout=5)
+    r = requests.post(
+        f"http://{host}:{port}/api/channel-labels",
+        json={"labels": {str(k): v for k, v in labels.items()}},
+        timeout=5,
+    )
     r.raise_for_status()
+
+COLORS = {
+    "r": "Red", "g": "Green", "b": "Blue", "w": "White",
+    "a": "Amber", "uv": "UV", "s": "Strobe", "d": "Dimmer",
+}
+
+def parse_label(raw):
+    raw_l = raw.lower()
+    # "1r" → F1 Red
+    if len(raw_l) >= 2 and raw_l[0].isdigit() and raw_l[1:] in COLORS:
+        return f"F{raw_l[0]} {COLORS[raw_l[1:]]}"
+    # "1 red" / "2 w"
+    parts = raw_l.split(None, 1)
+    if len(parts) == 2 and parts[0].isdigit():
+        return f"F{parts[0]} {COLORS.get(parts[1], parts[1].title())}"
+    # plain color "r" "g" etc
+    return COLORS.get(raw_l, raw.strip())
 
 def main():
     p = argparse.ArgumentParser()
@@ -45,36 +62,66 @@ def main():
     p.add_argument("--count", type=int, default=60, help="How many channels (default 60)")
     args = p.parse_args()
 
-    # quick connectivity check
+    # ── Server health check ────────────────────────────────────────────────────
     try:
-        r = requests.get(f"http://{args.host}:{args.port}/api/health", timeout=5)
-        print(f"Server OK: {r.json()}")
+        h = requests.get(f"http://{args.host}:{args.port}/api/health", timeout=5).json()
     except Exception as e:
-        sys.exit(f"Cannot reach server: {e}")
+        sys.exit(f"\nERROR: Cannot reach server at {args.host}:{args.port}\n  {e}\n  Is app.py running?")
+
+    enttec = h.get("enttec_connected", False)
+    artnet = h.get("artnet_enabled", False)
+    running = h.get("dmx_running", False)
+
+    print(f"\nServer: dmx_running={running}  enttec={enttec}  artnet={artnet}")
+
+    if not running:
+        print("\nWARNING: dmx_running=False – DMX thread is not running! No output possible.")
+        print("         Restart app.py and try again.")
+        sys.exit(1)
+
+    if not enttec and not artnet:
+        print("\nWARNING: No output active (enttec=False, artnet=False).")
+        print("         Check ENTTEC dongle is plugged in. App may need restart.")
+        sys.exit(1)
+
+    # ── Startup flash test: blink ch 5 three times so user confirms signal reaches fixture ──
+    print(f"\nFlashing channel {args.start} three times to confirm signal reaches fixture...")
+    for _ in range(3):
+        resp = test_channel(args.host, args.port, args.start, 255)
+        print(f"  ON  → server replied: {resp}")
+        time.sleep(0.6)
+        resp = test_channel(args.host, args.port, args.start, 0)
+        print(f"  OFF → server replied: {resp}")
+        time.sleep(0.3)
+
+    answer = input("\nDid the fixture flash? [y/n]: ").strip().lower()
+    if answer != "y":
+        print("\nFixture did not respond. Possible causes:")
+        print("  1. ENTTEC USB dongle not recognised – unplug and replug, restart app.py")
+        print("  2. DMX cable not connected / wrong port")
+        print("  3. Fixture not set to DMX mode or wrong start address")
+        print("  4. app.py is running but outputting to wrong device")
+        print("\nRun this to check ENTTEC status:")
+        print(f"  curl http://{args.host}:{args.port}/api/health")
+        sys.exit(1)
+
+    # ── Main mapping loop ──────────────────────────────────────────────────────
+    print("\nLight comes on → type what you see → Enter")
+    print("  1r=F1 Red  1g=F1 Green  1b=F1 Blue  1w=F1 White  (2r, 3b, etc.)")
+    print("  blank=skip   b=back   q=quit+save\n")
 
     channels = list(range(args.start, args.start + args.count))
-    labels = {}   # {ch: label_string}
+    labels = {}
     i = 0
-
-    print()
-    print("Light comes on → type what you see → Enter")
-    print("Shortcuts: r=Red  g=Green  b=Blue  w=White  a=Amber  uv=UV")
-    print("           1r=F1 Red  2g=F2 Green  3b=F3 Blue  4w=F4 White")
-    print("blank=skip  b=back  q=quit+save")
-    print()
-
-    COLORS = {"r":"Red","g":"Green","b":"Blue","w":"White",
-               "a":"Amber","uv":"UV","s":"Strobe","d":"Dimmer"}
 
     while i < len(channels):
         ch = channels[i]
         existing = labels.get(ch, "")
 
-        # light it up
         try:
-            flash(args.host, args.port, ch)
+            test_channel(args.host, args.port, ch, 255)
         except Exception as e:
-            print(f"  ERROR flashing ch {ch}: {e}")
+            print(f"  ERROR on ch {ch}: {e}")
             i += 1
             continue
 
@@ -82,6 +129,7 @@ def main():
         try:
             raw = input(f"  ch {ch:>3}{hint} → ").strip()
         except (KeyboardInterrupt, EOFError):
+            print()
             break
 
         if raw == "q":
@@ -94,49 +142,28 @@ def main():
             i += 1
             continue
 
-        # parse shorthand like "1r", "2w", "3b", "4g" or "1 red" etc.
-        # also plain color shortcuts "r", "g", "b", "w"
-        raw_lower = raw.lower()
-
-        # "1r" / "2w" / "3b" shorthand
-        label = None
-        if len(raw_lower) >= 2 and raw_lower[0].isdigit() and raw_lower[1:] in COLORS:
-            label = f"F{raw_lower[0]} {COLORS[raw_lower[1:]]}"
-        # "1 red" / "2 w" / "3 blue"
-        elif " " in raw_lower:
-            parts = raw_lower.split(None, 1)
-            if parts[0].isdigit():
-                color = COLORS.get(parts[1], parts[1].title())
-                label = f"F{parts[0]} {color}"
-        # plain color "r" "g" "b" "w"
-        if label is None:
-            label = COLORS.get(raw_lower, raw.strip())
-
+        label = parse_label(raw)
         labels[ch] = label
-        print(f"         ✓ ch {ch} = {label}")
+        print(f"         ✓  {label}")
         i += 1
 
     blackout(args.host, args.port)
-    print()
 
     if not labels:
         print("Nothing mapped.")
         return
 
-    # show summary
-    print(f"{'Ch':>4}  Label")
+    # ── Summary ────────────────────────────────────────────────────────────────
+    print(f"\n{'Ch':>4}  Label")
     print("─" * 20)
     for ch in sorted(labels):
         print(f"{ch:>4}  {labels[ch]}")
-    print()
 
-    # save JSON
-    out = {"mapped_at": datetime.now().isoformat(timespec="seconds"), "channels": labels}
     with open("fixture_map.json", "w") as f:
-        json.dump(out, f, indent=2)
-    print("Saved → fixture_map.json")
+        json.dump({"mapped_at": datetime.now().isoformat(timespec="seconds"),
+                   "channels": labels}, f, indent=2)
+    print("\nSaved → fixture_map.json")
 
-    # push to server
     try:
         push_labels(args.host, args.port, labels)
         print(f"Pushed {len(labels)} labels to DMX server.")
