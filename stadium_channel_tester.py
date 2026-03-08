@@ -59,6 +59,17 @@ def api_test_channel(sess, base_url, ch, val):
         err(f"test-channel failed: {exc}")
         return False
 
+def api_set_channels(sess, base_url, channel_dict):
+    try:
+        r = sess.post(f"{base_url}/api/channels",
+                      json={"channels": {str(k): v for k, v in channel_dict.items()}},
+                      timeout=5)
+        r.raise_for_status()
+        return True
+    except Exception as exc:
+        err(f"set-channels failed: {exc}")
+        return False
+
 def api_blackout(sess, base_url):
     try:
         sess.post(f"{base_url}/api/blackout", timeout=5).raise_for_status()
