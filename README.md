@@ -229,6 +229,23 @@ sudo journalctl -u dmx -f
 
 ## Troubleshooting
 
+### Git pull fails with "detected dubious ownership"
+
+If `git pull` shows:
+
+```
+fatal: detected dubious ownership in repository at '/home/tech/new-dmx'
+```
+
+mark the repo path as safe for your user, then pull again:
+
+```bash
+git config --global --add safe.directory /home/tech/new-dmx
+git pull
+```
+
+If your repo is in a different path, replace `/home/tech/new-dmx` with that exact path.
+
 ### ENTTEC not detected
 
 ```bash
