@@ -79,7 +79,9 @@ def api_apply_labels(sess, base_url, labels: dict):
 def check_server(sess, base_url):
     try:
         r = sess.get(f"{base_url}/api/health", timeout=5)
-        r.raise_for_status()
+        # Accept both 200 (healthy) and 503 (degraded but reachable)
+        if r.status_code not in (200, 503):
+            r.raise_for_status()
         return r.json()
     except Exception:
         return None
@@ -127,6 +129,10 @@ def parse_label(raw: str):
 FLASH_VALUE = 220   # bright but not blinding
 FLASH_DELAY = 0.15  # short pause after setting channel so DMX frame arrives
 
+# Channels to hold at 255 during the whole wizard run so a master-dimmer
+# or mode channel doesn't block the RGBW output.  Adjust with --master-ch.
+DEFAULT_HOLD_CHANNELS = []   # empty = don't assume anything; user can set via CLI
+
 SESSION_FILE = "stadium_mapping.json"
 
 def save_mapping(mapping: dict, path: str):
@@ -161,10 +167,28 @@ def print_summary(mapping: dict):
         print(c(f"  {int(ch_str):>4}  {label}", colour))
 
 
+def flash_ch(http_sess, base_url, prev_ch, curr_ch, hold_channels):
+    """
+    Light curr_ch at FLASH_VALUE; turn off prev_ch.
+    Leaves hold_channels (e.g. master dimmer) untouched at their current values.
+    Uses /api/channels so it only touches the two channels being toggled –
+    it does NOT zero everything the way /api/test-channel does.
+    """
+    updates = {curr_ch: FLASH_VALUE}
+    if prev_ch is not None and prev_ch != curr_ch:
+        updates[prev_ch] = 0
+    # Ensure hold channels stay at 255
+    for hc in hold_channels:
+        updates[hc] = 255
+    api_set_channels(http_sess, base_url, updates)
+    time.sleep(FLASH_DELAY)
+
+
 def run_wizard(args, base_url, http_sess):
-    total    = args.channels
-    start_ch = args.start_ch
-    mapping  = {}   # {str(ch): {"label": str}}
+    total        = args.channels
+    start_ch     = args.start_ch
+    hold_channels = args.hold_channels
+    mapping      = {}   # {str(ch): {"label": str}}
 
     # Load existing session so you can resume
     if os.path.exists(SESSION_FILE):
@@ -181,17 +205,21 @@ def run_wizard(args, base_url, http_sess):
     print(c("  Format:  f<N> <color>   e.g.  f1 red   f2 white   f3 blue", DIM))
     print(c("  Other:   strobe / dimmer / nothing / skip / back / done\n", DIM))
 
+    if hold_channels:
+        print(c(f"  Holding ch {hold_channels} at 255 (master/control).\n", YELLOW))
+
     ch_list = list(range(start_ch, start_ch + total))
     i = 0
+    prev_ch = None
 
     while i < len(ch_list):
         ch = ch_list[i]
         ch_str = str(ch)
         existing = mapping.get(ch_str, {}).get("label", "")
 
-        # Flash this channel
-        api_test_channel(http_sess, base_url, ch, FLASH_VALUE)
-        time.sleep(FLASH_DELAY)
+        # Light this channel; turn off whichever was on before
+        flash_ch(http_sess, base_url, prev_ch, ch, hold_channels)
+        prev_ch = ch
 
         # Prompt
         existing_hint = c(f" [{existing}]", YELLOW) if existing else ""
@@ -211,6 +239,7 @@ def run_wizard(args, base_url, http_sess):
         if raw in ("back", "p"):
             if i > 0:
                 i -= 1
+                prev_ch = ch_list[i - 1] if i > 0 else None
             else:
                 warn("Already at first channel.")
             continue
@@ -221,16 +250,21 @@ def run_wizard(args, base_url, http_sess):
             continue
 
         if raw == "?":
-            # Re-flash without advancing
-            api_blackout(http_sess, base_url)
-            time.sleep(0.1)
-            api_test_channel(http_sess, base_url, ch, FLASH_VALUE)
+            # Re-flash same channel (already on, but force a blink)
+            updates = {ch: 0}
+            updates.update({hc: 255 for hc in hold_channels})
+            api_set_channels(http_sess, base_url, updates)
+            time.sleep(0.15)
+            flash_ch(http_sess, base_url, None, ch, hold_channels)
             continue
 
         if raw == "b":
             api_blackout(http_sess, base_url)
             time.sleep(0.3)
-            api_test_channel(http_sess, base_url, ch, FLASH_VALUE)
+            if hold_channels:
+                api_set_channels(http_sess, base_url, {hc: 255 for hc in hold_channels})
+            flash_ch(http_sess, base_url, None, ch, hold_channels)
+            prev_ch = ch
             continue
 
         # Record label
@@ -263,6 +297,10 @@ def parse_args():
                    help="First channel to test (default: 1)")
     p.add_argument("--channels", type=int, default=32, metavar="N",
                    help="How many channels to step through (default: 32)")
+    p.add_argument("--hold-ch",  type=int, nargs="+", default=[], metavar="N",
+                   dest="hold_channels",
+                   help="Channel(s) to hold at 255 throughout the test "
+                        "(e.g. master dimmer).  Example: --hold-ch 1")
     return p.parse_args()
 
 
@@ -278,8 +316,18 @@ def main():
     if health is None:
         err(f"Cannot reach {base_url} – is app.py running?")
         sys.exit(1)
-    ok(f"Server OK  (ENTTEC={health.get('enttec_connected')}, "
-       f"Art-Net={health.get('artnet_enabled')})")
+
+    enttec  = health.get("enttec_connected", False)
+    artnet  = health.get("artnet_enabled",   False)
+    running = health.get("dmx_running",      False)
+
+    if enttec or artnet:
+        ok(f"Server OK  |  ENTTEC={enttec}  Art-Net={artnet}  DMX running={running}")
+    else:
+        warn(f"Server reachable but NO output active  "
+             f"(ENTTEC={enttec}, Art-Net={artnet}, dmx_running={running})")
+        warn("Check that your ENTTEC dongle is plugged in OR Art-Net is enabled in app.py.")
+        warn("The wizard will still run but the fixture may not respond.")
 
     run_wizard(args, base_url, http_sess)
     http_sess.close()
