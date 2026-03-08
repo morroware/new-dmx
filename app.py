@@ -1533,16 +1533,17 @@ def api_test_channel():
     if not isinstance(data, dict) or 'channel' not in data:
         return jsonify({'error': 'Missing channel'}), 400
 
-    channel = max(1, min(512, int(data['channel'])))
-    value = max(0, min(255, int(data.get('value', 255))))
+    try:
+        channel = max(1, min(512, int(data['channel'])))
+        value = max(0, min(255, int(data.get('value', 255))))
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Invalid channel or value'}), 400
 
-    # Zero all channels first
-    for i in range(512):
-        state.channels[i] = 0
-
-    # Set the target channel
-    state.channels[channel - 1] = value
-    state.dirty = True
+    # Zero all channels first, then set requested channel (1-indexed)
+    with state.dmx_lock:
+        for i in range(1, config.DMX_CHANNELS + 1):
+            state.dmx_data[i] = 0
+        state.dmx_data[channel] = value
 
     logger.info("Channel test: ch %d = %d (all others = 0)", channel, value)
     return jsonify({'success': True, 'channel': channel, 'value': value})
