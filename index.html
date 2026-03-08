@@ -161,6 +161,9 @@
         .channel-item[data-color="dimmer"] .channel-value { color: #eab308; }
         .channel-item[data-color="dimmer"] input[type="range"]::-webkit-slider-thumb { background: linear-gradient(135deg, #eab308 0%, #ca8a04 100%); box-shadow: 0 2px 8px rgba(234,179,8,0.5); }
         .channel-item[data-color="dimmer"] input[type="range"]::-moz-range-thumb { background: linear-gradient(135deg, #eab308 0%, #ca8a04 100%); }
+        .channel-controls { display: flex; gap: 10px; align-items: center; }
+        .channel-controls input[type="range"] { flex: 1; }
+        .channel-input { width: 78px !important; flex: 0 0 78px; text-align: center; font-family: 'SF Mono', 'Consolas', monospace; }
         /* Fixture control panel */
         .fixture-panel { margin-bottom: 20px; }
         .fixture-panel h2 { margin-bottom: 12px; }
@@ -448,13 +451,13 @@
                 <div style="margin-top: 25px; padding-top: 20px; border-top: 1px solid #2a2a3a;">
                     <h2>Fixture Profile</h2>
                     <p style="color: #71717a; font-size: 13px; margin-bottom: 12px;">
-                        Apply a fixture profile to auto-configure channel labels for your light. This replaces existing labels.
+                        Apply a generic fixture profile to quickly label channels. Profiles are starting templates and can be customized after applying.
                     </p>
                     <div class="grid-2">
                         <div class="form-group">
-                            <label>Fixture Type</label>
+                            <label>Fixture Template</label>
                             <select id="fixture-profile-select">
-                                <option value="">-- Select Fixture --</option>
+                                <option value="">-- Select Template --</option>
                             </select>
                         </div>
                         <div class="form-group">
@@ -473,11 +476,10 @@
                 </div>
 
                 <div style="margin-top: 25px; padding-top: 20px; border-top: 1px solid #2a2a3a;">
-                    <h2>DMX Channel Tester</h2>
+                    <h2>DMX Mapping Tester</h2>
                     <p style="color: #71717a; font-size: 13px; margin-bottom: 12px;">
-                        Test one channel at a time (all others set to 0) to discover your fixture's DMX channel mapping.
-                        Note what each channel does, then select the matching profile above.
-                        For Stadium Pro III 1200W RGBW, start with the 7ch profile (Dimmer, Strobe, Color Macro, R, G, B, W).
+                        Test one channel at a time (all others set to 0) to discover how any fixture maps DMX channels.
+                        Note what each channel does, then choose or customize labels as needed.
                     </p>
                     <div class="grid-2">
                         <div class="form-group">
@@ -497,7 +499,7 @@
                     </div>
                     <div id="test-channel-info" style="color: #a1a1aa; font-size: 12px; margin-top: 10px;"></div>
                     <div style="margin-top: 12px; padding: 12px; background: #0f0f14; border-radius: 8px; border: 1px solid #2a2a3a;">
-                        <div style="font-size: 11px; font-weight: 600; color: #71717a; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px;">Common RGBW Channel Maps (what channel 1 should be)</div>
+                        <div style="font-size: 11px; font-weight: 600; color: #71717a; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px;">Common Generic Fixture Patterns</div>
                         <div style="font-size: 12px; color: #a1a1aa; line-height: 1.8;">
                             <strong style="color:#60a5fa">4ch:</strong> Red, Green, Blue, White<br>
                             <strong style="color:#60a5fa">5ch:</strong> Dimmer, Red, Green, Blue, White<br>
@@ -666,13 +668,18 @@
                     <span class="channel-label" id="ch-label-${ch}" onclick="openLabelModal(${ch})" title="Click to rename">${label}</span>
                     <span class="channel-value" id="ch-val-${ch}">0</span>
                 </div>
-                <input type="range" id="ch-slider-${ch}" min="0" max="255" value="0"
-                       oninput="onSliderInput(${ch}, this.value)"
-                       onmousedown="activeSlider=${ch}" ontouchstart="activeSlider=${ch}">
+                <div class="channel-controls">
+                    <input type="range" id="ch-slider-${ch}" min="0" max="255" value="0"
+                           oninput="onSliderInput(${ch}, this.value)"
+                           onmousedown="activeSlider=${ch}" ontouchstart="activeSlider=${ch}">
+                    <input type="number" class="channel-input" id="ch-input-${ch}" min="0" max="255" value="0"
+                           oninput="onChannelInput(${ch}, this.value)">
+                </div>
             `;
             grid.appendChild(item);
         }
         document.getElementById('channel-count-label').textContent = `${visibleChannels} channels`;
+        setChannelControlsReadOnly(receiverMode);
         renderFixturePanel();
 
         // Only attach global listeners once
@@ -683,13 +690,33 @@
         }
     }
 
+
+    function sanitizeChannelValue(value) {
+        const num = parseInt(value);
+        if (Number.isNaN(num)) return 0;
+        return Math.max(0, Math.min(255, num));
+    }
+
+    function setChannelControlsReadOnly(readOnly) {
+        for (let ch = 1; ch <= visibleChannels; ch++) {
+            const slider = document.getElementById(`ch-slider-${ch}`);
+            const input = document.getElementById(`ch-input-${ch}`);
+            if (slider) slider.disabled = readOnly;
+            if (input) input.disabled = readOnly;
+        }
+        document.querySelectorAll('[id^="af-slider-"]').forEach(el => { el.disabled = readOnly; });
+        document.querySelectorAll('.all-fixtures-item input[type="range"]').forEach(el => { el.disabled = readOnly; });
+    }
+
     function updateChannelDisplays(channels) {
         for (const [ch, val] of Object.entries(channels)) {
             const chNum = parseInt(ch);
             const valEl = document.getElementById(`ch-val-${chNum}`);
             const sliderEl = document.getElementById(`ch-slider-${chNum}`);
+            const inputEl = document.getElementById(`ch-input-${chNum}`);
             if (valEl) valEl.textContent = val;
             if (sliderEl && activeSlider !== chNum) sliderEl.value = val;
+            if (inputEl && activeSlider !== chNum) inputEl.value = val;
             // Sync fixture panel
             const afVal = document.getElementById(`af-val-${chNum}`);
             if (afVal) afVal.textContent = val;
@@ -706,12 +733,28 @@
     }
 
     function onSliderInput(channel, value) {
+        const cleanValue = sanitizeChannelValue(value);
         const valEl = document.getElementById(`ch-val-${channel}`);
-        if (valEl) valEl.textContent = value;
-        queueChannelUpdate(channel, value);
+        if (valEl) valEl.textContent = cleanValue;
+        const inputEl = document.getElementById(`ch-input-${channel}`);
+        if (inputEl) inputEl.value = cleanValue;
+        queueChannelUpdate(channel, cleanValue);
         // Update fixture panel value display if it exists
         const afVal = document.getElementById(`af-val-${channel}`);
-        if (afVal) afVal.textContent = value;
+        if (afVal) afVal.textContent = cleanValue;
+    }
+
+    function onChannelInput(channel, value) {
+        const cleanValue = sanitizeChannelValue(value);
+        const inputEl = document.getElementById(`ch-input-${channel}`);
+        if (inputEl && document.activeElement !== inputEl) inputEl.value = cleanValue;
+        const slider = document.getElementById(`ch-slider-${channel}`);
+        if (slider) slider.value = cleanValue;
+        const valEl = document.getElementById(`ch-val-${channel}`);
+        if (valEl) valEl.textContent = cleanValue;
+        queueChannelUpdate(channel, cleanValue);
+        const afVal = document.getElementById(`af-val-${channel}`);
+        if (afVal) afVal.textContent = cleanValue;
     }
 
     // ============================================
@@ -1145,6 +1188,7 @@
                 const artnetEl = document.getElementById('artnet-status');
                 const recvInfoEl = document.getElementById('artnet-receiver-info');
                 receiverMode = data.artnet_receiver_enabled;
+                setChannelControlsReadOnly(receiverMode);
                 if (data.artnet_receiver_enabled) {
                     artnetEl.textContent = data.artnet_receiver_active ? 'RECV' : 'ERR';
                     artnetEl.className = 'status-value ' + (data.artnet_receiver_active ? 'online' : 'offline');
@@ -1272,7 +1316,7 @@
             .then(data => {
                 fixtureProfiles = data;
                 const select = document.getElementById('fixture-profile-select');
-                select.innerHTML = '<option value="">-- Select Fixture --</option>';
+                select.innerHTML = '<option value="">-- Select Template --</option>';
                 // Group by manufacturer
                 const byMfg = {};
                 for (const [pid, profile] of Object.entries(data)) {

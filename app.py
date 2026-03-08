@@ -1341,9 +1341,9 @@ def api_set_channel_labels():
 # ============================================
 
 FIXTURE_PROFILES = {
-    'stadium-pro-3-rgb': {
-        'name': 'Stadium Pro III - RGB (3ch)',
-        'manufacturer': 'RuggedGrade',
+    'generic-rgb-3ch': {
+        'name': 'Generic RGB (3ch)',
+        'manufacturer': 'Generic',
         'channels_per_fixture': 3,
         'channel_map': {
             1: 'Red',
@@ -1351,9 +1351,9 @@ FIXTURE_PROFILES = {
             3: 'Blue',
         },
     },
-    'stadium-pro-3-rgbw-4ch': {
-        'name': 'Stadium Pro III - RGBW (4ch: R/G/B/W)',
-        'manufacturer': 'RuggedGrade',
+    'generic-rgbw-4ch': {
+        'name': 'Generic RGBW (4ch: R/G/B/W)',
+        'manufacturer': 'Generic',
         'channels_per_fixture': 4,
         'channel_map': {
             1: 'Red',
@@ -1362,9 +1362,9 @@ FIXTURE_PROFILES = {
             4: 'White',
         },
     },
-    'stadium-pro-3-rgbw-5ch': {
-        'name': 'Stadium Pro III - RGBW (5ch: Dim/R/G/B/W)',
-        'manufacturer': 'RuggedGrade',
+    'generic-dimmer-rgbw-5ch': {
+        'name': 'Generic Dimmer + RGBW (5ch)',
+        'manufacturer': 'Generic',
         'channels_per_fixture': 5,
         'channel_map': {
             1: 'Dimmer',
@@ -1374,9 +1374,9 @@ FIXTURE_PROFILES = {
             5: 'White',
         },
     },
-    'stadium-pro-3-rgbw-6ch': {
-        'name': 'Stadium Pro III - RGBW (6ch: Dim/Strobe/R/G/B/W)',
-        'manufacturer': 'RuggedGrade',
+    'generic-dimmer-strobe-rgbw-6ch': {
+        'name': 'Generic Dimmer + Strobe + RGBW (6ch)',
+        'manufacturer': 'Generic',
         'channels_per_fixture': 6,
         'channel_map': {
             1: 'Dimmer',
@@ -1387,9 +1387,9 @@ FIXTURE_PROFILES = {
             6: 'White',
         },
     },
-    'stadium-pro-3-rgbw-7ch': {
-        'name': 'Stadium Pro III - RGBW (7ch: Dim/Strobe/Macro/R/G/B/W)',
-        'manufacturer': 'RuggedGrade',
+    'generic-dimmer-strobe-macro-rgbw-7ch': {
+        'name': 'Generic Dimmer + Strobe + Macro + RGBW (7ch)',
+        'manufacturer': 'Generic',
         'channels_per_fixture': 7,
         'channel_map': {
             1: 'Dimmer',
@@ -1401,9 +1401,9 @@ FIXTURE_PROFILES = {
             7: 'White',
         },
     },
-    'stadium-pro-3-rgbw-8ch': {
-        'name': 'Stadium Pro III - RGBW (8ch: Dim/R/G/B/W/Strobe/Mode/Speed)',
-        'manufacturer': 'RuggedGrade',
+    'generic-rgbw-strobe-mode-speed-8ch': {
+        'name': 'Generic RGBW + Strobe + Mode + Speed (8ch)',
+        'manufacturer': 'Generic',
         'channels_per_fixture': 8,
         'channel_map': {
             1: 'Dimmer',
@@ -1416,9 +1416,9 @@ FIXTURE_PROFILES = {
             8: 'Speed',
         },
     },
-    'stadium-pro-3-rgbw-8ch-alt': {
-        'name': 'Stadium Pro III - RGBW (8ch Alt: Mode/Dim/R/G/B/W/Strobe/Speed)',
-        'manufacturer': 'RuggedGrade',
+    'generic-mode-dimmer-rgbw-strobe-speed-8ch': {
+        'name': 'Generic Mode + Dimmer + RGBW + Strobe + Speed (8ch alt)',
+        'manufacturer': 'Generic',
         'channels_per_fixture': 8,
         'channel_map': {
             1: 'Mode',
@@ -1431,9 +1431,9 @@ FIXTURE_PROFILES = {
             8: 'Speed',
         },
     },
-    'stadium-pro-3-rgbw-9ch': {
-        'name': 'Stadium Pro III - RGBW (9ch: Dim/R/G/B/W/Strobe/Macro/Speed/Mode)',
-        'manufacturer': 'RuggedGrade',
+    'generic-rgbw-strobe-macro-speed-mode-9ch': {
+        'name': 'Generic RGBW + Strobe + Macro + Speed + Mode (9ch)',
+        'manufacturer': 'Generic',
         'channels_per_fixture': 9,
         'channel_map': {
             1: 'Dimmer',
@@ -1447,48 +1447,38 @@ FIXTURE_PROFILES = {
             9: 'Mode',
         },
     },
-    'generic-rgb': {
-        'name': 'Generic RGB (3ch)',
+    'generic-par-basic-8ch': {
+        'name': 'Generic LED PAR Basic (8ch)',
         'manufacturer': 'Generic',
-        'channels_per_fixture': 3,
-        'channel_map': {
-            1: 'Red',
-            2: 'Green',
-            3: 'Blue',
-        },
-    },
-    'generic-rgbw': {
-        'name': 'Generic RGBW (4ch)',
-        'manufacturer': 'Generic',
-        'channels_per_fixture': 4,
-        'channel_map': {
-            1: 'Red',
-            2: 'Green',
-            3: 'Blue',
-            4: 'White',
-        },
-    },
-    'generic-drgbw': {
-        'name': 'Generic Dimmer+RGBW (5ch)',
-        'manufacturer': 'Generic',
-        'channels_per_fixture': 5,
+        'channels_per_fixture': 8,
         'channel_map': {
             1: 'Dimmer',
             2: 'Red',
             3: 'Green',
             4: 'Blue',
             5: 'White',
+            6: 'Strobe',
+            7: 'Program',
+            8: 'Speed',
         },
     },
-    'generic-drgb': {
-        'name': 'Generic Dimmer+RGB (4ch)',
+    'generic-moving-head-12ch': {
+        'name': 'Generic Moving Head Spot/Wash (12ch)',
         'manufacturer': 'Generic',
-        'channels_per_fixture': 4,
+        'channels_per_fixture': 12,
         'channel_map': {
-            1: 'Dimmer',
-            2: 'Red',
-            3: 'Green',
-            4: 'Blue',
+            1: 'Pan',
+            2: 'Pan Fine',
+            3: 'Tilt',
+            4: 'Tilt Fine',
+            5: 'Pan/Tilt Speed',
+            6: 'Dimmer',
+            7: 'Shutter/Strobe',
+            8: 'Color',
+            9: 'Gobo',
+            10: 'Gobo Rotate',
+            11: 'Prism/Focus',
+            12: 'Control/Reset',
         },
     },
 }

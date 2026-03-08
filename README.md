@@ -4,7 +4,7 @@ A Python-based DMX512 controller with a web interface for testing and controllin
 
 ## Features
 
-- **Web Interface** - Dark-themed responsive UI with per-channel sliders, labels, and real-time control
+- **Web Interface** - Dark-themed responsive UI with per-channel sliders, direct numeric value fields, labels, and real-time control
 - **Configurable Channels** - Start with 16, add up to 512 in increments of 8 from the UI
 - **Custom Channel Labels** - Name each channel (e.g. "Dimmer", "Red", "Strobe") for any fixture
 - **Unlimited Scenes** - Create, name, save, recall, and delete as many scenes as you need
@@ -108,7 +108,7 @@ pip install -r requirements.txt
 
 ### Channels Tab
 
-- Each channel has a slider (0-255) and a customizable label
+- Each channel has both a slider and editable numeric value field (0-255), plus a customizable label
 - Click any channel label to rename it (e.g. "Red", "Dimmer", "Gobo")
 - Use **+ Add Channels** / **- Remove Channels** to adjust the visible channel count
 - **BLACKOUT** zeros all channels instantly
@@ -127,17 +127,11 @@ pip install -r requirements.txt
 - **Channel Labels** — managed from the Channels tab (click to rename)
 - **GPIO** — shows pin assignments and current contact/safety state
 
-### Stadium Pro III 1200W RGBW Setup (Verified in this project)
+### Generic Fixture Templates and Mapping
 
-For the Stadium Pro III 1200W RGBW tested with this controller, the working profile is:
+The Settings tab includes generic fixture templates (RGB, RGBW, dimmer/strobe variants, LED PAR, moving head, etc.) to quickly pre-label channels for many fixture types.
 
-- `7ch`: `Dimmer, Strobe, Color Macro, Red, Green, Blue, White`
-
-If DMX channels feel "off" (for example, color sliders trigger strobe/macro), the fixture and controller are in different DMX personalities.
-
-1. On the fixture display, set DMX personality to **7ch**.
-2. In the web UI, open **Settings → Fixture Profiles** and apply **Stadium Pro III - RGBW (7ch: Dim/Strobe/Macro/R/G/B/W)**.
-3. If behavior still mismatches, run **DMX Channel Tester** to verify the fixture's real mapping channel-by-channel.
+If channel behavior does not match the fixture manual, run **DMX Mapping Tester** to identify the real channel mapping on your device, then rename labels in the Channels tab as needed.
 
 
 ## Art-Net
@@ -172,7 +166,7 @@ Listens for incoming Art-Net DMX packets and outputs the received data via the E
 3. Click **Save Art-Net Settings**
 
 In receiver mode:
-- The channel sliders show incoming Art-Net values in real-time
+- Channel sliders and numeric fields show incoming Art-Net values in real-time
 - The status bar shows **RECV** with packet count and last-seen timing
 - The ENTTEC USB output continuously sends received data to fixtures at 44Hz
 
