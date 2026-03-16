@@ -95,7 +95,8 @@ class Config:
     FTDI_URL = os.environ.get("DMX_FTDI_URL", "ftdi://0403:6001/1")
 
     # How many channels to show in the UI by default
-    VISIBLE_CHANNELS = 16
+    # 20 channels covers 4x Stadium Pro III RGBW fixtures (ch 5-20)
+    VISIBLE_CHANNELS = 20
 
     # Art-Net settings
     ARTNET_ENABLED = os.environ.get("DMX_ARTNET_ENABLED", "false").lower() in ("1", "true", "yes")
@@ -118,7 +119,14 @@ class Config:
 
     # Channel labels — user-customizable names for each channel number.
     # Any channel not listed here is shown as "Channel N".
-    CHANNEL_LABELS = {}
+    # Default: 4x Stadium Pro III 1200W RGBW fixtures starting at ch 5.
+    # Channels 1-4 are reserved by the decoders (do not set to 255).
+    CHANNEL_LABELS = {
+        5: 'F1 Red', 6: 'F1 Green', 7: 'F1 Blue', 8: 'F1 White',
+        9: 'F2 Red', 10: 'F2 Green', 11: 'F2 Blue', 12: 'F2 White',
+        13: 'F3 Red', 14: 'F3 Green', 15: 'F3 Blue', 16: 'F3 White',
+        17: 'F4 Red', 18: 'F4 Green', 19: 'F4 Blue', 20: 'F4 White',
+    }
 
     # Scenes — unlimited named scenes stored as {id: {name, channels}}
     SCENES = {}
@@ -1481,74 +1489,25 @@ FIXTURE_PROFILES = {
             12: 'Control/Reset',
         },
     },
-    # ── Stadium Pro III 1200W RGBW ──────────────────────────────────
-    # Two HB-320CE-60 BH DMX decoders, each with R/G/B/W outputs.
-    # The fixture may operate in several DMX modes depending on DIP
-    # switch or digital menu configuration on the decoder boards.
+    # ── Stadium Pro III 1200W RGBW (RuggedGrade / LEDLightExpert) ────
+    # HB-320CE-60 BH DMX decoders, one per fixture, 4ch RGBW each.
+    # Channels 1-4 are unused/reserved (255 = blackout on the decoder).
+    # Actual RGBW starts at channel 5 for the first fixture.
+    # Discovered layout:
+    #   Fixture 1: ch 5-8   (R,G,B,W)
+    #   Fixture 2: ch 9-12  (R,G,B,W)
+    #   Fixture 3: ch 13-16 (R,G,B,W)
+    #   Fixture 4: ch 17-20 (R,G,B,W)
+    # Use start_address=5, fixture_count=4 when applying.
     'stadium-pro-iii-rgbw-4ch': {
         'name': 'Stadium Pro III 1200W RGBW (4ch)',
-        'manufacturer': 'Stadium Pro',
+        'manufacturer': 'RuggedGrade',
         'channels_per_fixture': 4,
         'channel_map': {
             1: 'Red',
             2: 'Green',
             3: 'Blue',
             4: 'White',
-        },
-    },
-    'stadium-pro-iii-dimmer-rgbw-5ch': {
-        'name': 'Stadium Pro III 1200W RGBW (5ch: Dim+RGBW)',
-        'manufacturer': 'Stadium Pro',
-        'channels_per_fixture': 5,
-        'channel_map': {
-            1: 'Dimmer',
-            2: 'Red',
-            3: 'Green',
-            4: 'Blue',
-            5: 'White',
-        },
-    },
-    'stadium-pro-iii-dimmer-strobe-rgbw-6ch': {
-        'name': 'Stadium Pro III 1200W RGBW (6ch: Dim+Strobe+RGBW)',
-        'manufacturer': 'Stadium Pro',
-        'channels_per_fixture': 6,
-        'channel_map': {
-            1: 'Dimmer',
-            2: 'Strobe',
-            3: 'Red',
-            4: 'Green',
-            5: 'Blue',
-            6: 'White',
-        },
-    },
-    'stadium-pro-iii-dual-rgbw-8ch': {
-        'name': 'Stadium Pro III 1200W Dual RGBW (8ch: 2 zones)',
-        'manufacturer': 'Stadium Pro',
-        'channels_per_fixture': 8,
-        'channel_map': {
-            1: 'Red Zone1',
-            2: 'Green Zone1',
-            3: 'Blue Zone1',
-            4: 'White Zone1',
-            5: 'Red Zone2',
-            6: 'Green Zone2',
-            7: 'Blue Zone2',
-            8: 'White Zone2',
-        },
-    },
-    'stadium-pro-iii-full-8ch': {
-        'name': 'Stadium Pro III 1200W RGBW (8ch: Dim+RGBW+Strobe+Mode+Speed)',
-        'manufacturer': 'Stadium Pro',
-        'channels_per_fixture': 8,
-        'channel_map': {
-            1: 'Dimmer',
-            2: 'Red',
-            3: 'Green',
-            4: 'Blue',
-            5: 'White',
-            6: 'Strobe',
-            7: 'Mode',
-            8: 'Speed',
         },
     },
 }
