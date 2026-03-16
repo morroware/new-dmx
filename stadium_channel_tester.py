@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Stadium Pro II 1200x RGBW – Channel Discovery & Mapping Tester
+Stadium Pro III 1200W RGBW – Channel Discovery & Mapping Tester
 ===============================================================
 Connects to the local DMX Flask server (app.py) and systematically
 tests every channel so you can observe what each one does and build
@@ -307,7 +307,7 @@ def auto_scan(session, base_url, start_ch, num_channels, sess_channels):
 
 def default_session(start_ch, num_channels):
     return {
-        "fixture": "Stadium Pro II 1200x RGBW",
+        "fixture": "Stadium Pro III 1200W RGBW",
         "created": datetime.now().isoformat(timespec="seconds"),
         "start_channel": start_ch,
         "num_channels": num_channels,
@@ -449,7 +449,7 @@ def run_interactive(args, base_url, http_session, sess):
     current_ch = args.start_ch
     session_file = args.session_file
 
-    header("Stadium Pro II 1200x RGBW – Channel Tester")
+    header("Stadium Pro III 1200W RGBW – Channel Tester")
     print(c(f"  Server  : {base_url}", DIM))
     print(c(f"  Start ch: {args.start_ch}   |   Testing {args.channels} channels   |   Fixture start = ch {args.start_ch}", DIM))
     print(MENU)
@@ -594,14 +594,14 @@ def run_interactive(args, base_url, http_session, sess):
 
 def parse_args():
     p = argparse.ArgumentParser(
-        description="Interactive DMX channel tester for Stadium Pro II 1200x RGBW",
+        description="Interactive DMX channel tester for Stadium Pro III 1200W RGBW",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
     p.add_argument("--host", default="localhost", help="Flask server host (default: localhost)")
     p.add_argument("--port", type=int, default=5000, help="Flask server port (default: 5000)")
-    p.add_argument("--start-ch", type=int, default=5, metavar="N",
-                   help="First DMX channel to test (default: 5, first visible RGBW channel)")
+    p.add_argument("--start-ch", type=int, default=1, metavar="N",
+                   help="First DMX channel to test (default: 1)")
     p.add_argument("--channels", type=int, default=60, metavar="N",
                    help="How many channels to probe (default: 60)")
     p.add_argument("--session-file", default="stadium_discovery.json", metavar="FILE",

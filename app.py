@@ -1481,6 +1481,76 @@ FIXTURE_PROFILES = {
             12: 'Control/Reset',
         },
     },
+    # ── Stadium Pro III 1200W RGBW ──────────────────────────────────
+    # Two HB-320CE-60 BH DMX decoders, each with R/G/B/W outputs.
+    # The fixture may operate in several DMX modes depending on DIP
+    # switch or digital menu configuration on the decoder boards.
+    'stadium-pro-iii-rgbw-4ch': {
+        'name': 'Stadium Pro III 1200W RGBW (4ch)',
+        'manufacturer': 'Stadium Pro',
+        'channels_per_fixture': 4,
+        'channel_map': {
+            1: 'Red',
+            2: 'Green',
+            3: 'Blue',
+            4: 'White',
+        },
+    },
+    'stadium-pro-iii-dimmer-rgbw-5ch': {
+        'name': 'Stadium Pro III 1200W RGBW (5ch: Dim+RGBW)',
+        'manufacturer': 'Stadium Pro',
+        'channels_per_fixture': 5,
+        'channel_map': {
+            1: 'Dimmer',
+            2: 'Red',
+            3: 'Green',
+            4: 'Blue',
+            5: 'White',
+        },
+    },
+    'stadium-pro-iii-dimmer-strobe-rgbw-6ch': {
+        'name': 'Stadium Pro III 1200W RGBW (6ch: Dim+Strobe+RGBW)',
+        'manufacturer': 'Stadium Pro',
+        'channels_per_fixture': 6,
+        'channel_map': {
+            1: 'Dimmer',
+            2: 'Strobe',
+            3: 'Red',
+            4: 'Green',
+            5: 'Blue',
+            6: 'White',
+        },
+    },
+    'stadium-pro-iii-dual-rgbw-8ch': {
+        'name': 'Stadium Pro III 1200W Dual RGBW (8ch: 2 zones)',
+        'manufacturer': 'Stadium Pro',
+        'channels_per_fixture': 8,
+        'channel_map': {
+            1: 'Red Zone1',
+            2: 'Green Zone1',
+            3: 'Blue Zone1',
+            4: 'White Zone1',
+            5: 'Red Zone2',
+            6: 'Green Zone2',
+            7: 'Blue Zone2',
+            8: 'White Zone2',
+        },
+    },
+    'stadium-pro-iii-full-8ch': {
+        'name': 'Stadium Pro III 1200W RGBW (8ch: Dim+RGBW+Strobe+Mode+Speed)',
+        'manufacturer': 'Stadium Pro',
+        'channels_per_fixture': 8,
+        'channel_map': {
+            1: 'Dimmer',
+            2: 'Red',
+            3: 'Green',
+            4: 'Blue',
+            5: 'White',
+            6: 'Strobe',
+            7: 'Mode',
+            8: 'Speed',
+        },
+    },
 }
 
 
