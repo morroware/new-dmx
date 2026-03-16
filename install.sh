@@ -2,6 +2,7 @@
 # ============================================
 # DMX Controller - Automated Installer
 # For Raspberry Pi (Pi 4 & Pi 5, Bookworm)
+# Supports ENTTEC DMX USB Pro and Open DMX USB
 # ============================================
 set -e
 
@@ -67,49 +68,51 @@ apt-get install -y -qq \
 ok "System packages installed"
 
 # ------------------------------------------
-# 2. Blacklist ftdi_sio kernel module
+# 2. Kernel module handling for ENTTEC devices
 # ------------------------------------------
+# ENTTEC DMX USB Pro requires ftdi_sio (serial port driver) to be LOADED.
+# ENTTEC Open DMX USB requires ftdi_sio to be BLACKLISTED (uses pyftdi/libusb).
+# Default: leave ftdi_sio loaded (Pro is the primary/recommended controller).
+# Set DMX_DRIVER=enttec_open in /etc/dmx/dmx.env if using Open DMX USB.
 MODPROBE_FILE="/etc/modprobe.d/ftdi-blacklist.conf"
-if [ ! -f "$MODPROBE_FILE" ]; then
-    info "Blacklisting ftdi_sio kernel module..."
-    cat > "$MODPROBE_FILE" <<'BLACKLIST'
-# Prevent the kernel ftdi_sio driver from claiming ENTTEC / FTDI devices
-# so that pyftdi (userspace) can access them via libusb.
-blacklist ftdi_sio
-BLACKLIST
-    ok "ftdi_sio blacklisted in ${MODPROBE_FILE}"
+if [ -f "$MODPROBE_FILE" ]; then
+    info "Removing old ftdi_sio blacklist (ENTTEC DMX USB Pro needs ftdi_sio loaded)..."
+    rm -f "$MODPROBE_FILE"
+    ok "ftdi_sio blacklist removed — Pro will use /dev/ttyUSB*"
 else
-    ok "ftdi_sio blacklist already in place"
+    ok "ftdi_sio not blacklisted (correct for ENTTEC DMX USB Pro)"
 fi
 
-# Unload ftdi_sio if currently loaded
-if lsmod | grep -q ftdi_sio; then
-    info "Unloading ftdi_sio kernel module..."
-    rmmod ftdi_sio 2>/dev/null || warn "Could not unload ftdi_sio (may need a reboot)"
+# Load ftdi_sio if not already loaded (needed for Pro)
+if ! lsmod | grep -q ftdi_sio; then
+    info "Loading ftdi_sio kernel module for ENTTEC DMX USB Pro..."
+    modprobe ftdi_sio 2>/dev/null || warn "Could not load ftdi_sio (may need a reboot)"
 fi
 
 # ------------------------------------------
 # 3. FTDI udev rules (non-root USB access)
 # ------------------------------------------
 UDEV_RULES="/etc/udev/rules.d/99-ftdi-dmx.rules"
-if [ ! -f "$UDEV_RULES" ]; then
-    info "Creating FTDI udev rules..."
-    cat > "$UDEV_RULES" <<'UDEV'
-# ENTTEC Open DMX USB / FTDI devices — allow non-root access
+info "Creating FTDI/ENTTEC udev rules..."
+cat > "$UDEV_RULES" <<'UDEV'
+# ENTTEC DMX USB Pro & Open DMX USB (FTDI) — allow non-root USB and serial access
 SUBSYSTEM=="usb", ATTR{idVendor}=="0403", ATTR{idProduct}=="6001", MODE="0666", GROUP="plugdev"
 SUBSYSTEM=="usb", ATTR{idVendor}=="0403", ATTR{idProduct}=="6014", MODE="0666", GROUP="plugdev"
+# Serial port access for ENTTEC DMX USB Pro (appears as /dev/ttyUSB*)
+SUBSYSTEM=="tty", ATTRS{idVendor}=="0403", ATTRS{idProduct}=="6001", MODE="0666", GROUP="dialout", SYMLINK+="dmx-pro"
 UDEV
-    udevadm control --reload-rules
-    udevadm trigger
-    ok "udev rules installed (unplug/replug the ENTTEC adapter)"
-else
-    ok "udev rules already exist"
-fi
+udevadm control --reload-rules
+udevadm trigger
+ok "udev rules installed (unplug/replug the ENTTEC adapter)"
 
-# Add user to plugdev group
+# Add user to plugdev and dialout groups (USB + serial port access)
 if ! id -nG "$RUN_USER" | grep -qw plugdev; then
     usermod -aG plugdev "$RUN_USER"
     ok "Added ${RUN_USER} to plugdev group"
+fi
+if ! id -nG "$RUN_USER" | grep -qw dialout; then
+    usermod -aG dialout "$RUN_USER"
+    ok "Added ${RUN_USER} to dialout group (serial port access for DMX USB Pro)"
 fi
 
 # ------------------------------------------
@@ -157,6 +160,9 @@ mkdir -p "$ENV_DIR"
 if [ ! -f "$ENV_FILE" ]; then
     cat > "$ENV_FILE" <<EOF
 DMX_CONFIG_DIR=${CONFIG_DIR}
+# DMX_DRIVER=auto
+# Options: auto (try Pro then Open), enttec_pro, enttec_open
+# DMX_SERIAL_PORT=/dev/ttyUSB0
 # DMX_ARTNET_ENABLED=true
 # DMX_ARTNET_TARGET_IP=255.255.255.255
 # DMX_ARTNET_UNIVERSE=0
@@ -199,8 +205,8 @@ RestartSec=5
 StandardOutput=journal
 StandardError=journal
 
-# Give access to USB and GPIO
-SupplementaryGroups=plugdev gpio
+# Give access to USB, serial ports, and GPIO
+SupplementaryGroups=plugdev dialout gpio
 
 # Improve timing stability for DMX output
 Nice=-10
@@ -276,8 +282,8 @@ fi
 
 echo ""
 echo "  The service starts automatically on boot."
-echo "  Plug in the ENTTEC Open DMX USB adapter and"
-echo "  connect your DMX fixtures."
+echo "  Plug in your ENTTEC DMX USB Pro (or Open DMX USB)"
+echo "  and connect your DMX fixtures."
 echo ""
 echo "  To uninstall:  sudo ./uninstall.sh"
 echo ""
