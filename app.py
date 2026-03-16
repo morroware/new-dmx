@@ -91,7 +91,7 @@ class Config:
 
     # DMX Settings
     DMX_CHANNELS = 512
-    DMX_REFRESH_RATE = 30
+    DMX_REFRESH_RATE = 40
     FTDI_URL = os.environ.get("DMX_FTDI_URL", "ftdi://0403:6001/1")
 
     # How many channels to show in the UI by default
@@ -626,18 +626,6 @@ def reinit_enttec():
             return False
 
 
-# DMX break baud rate: sending 0x00 at this rate produces a break via
-# the UART's start bit + data bits.  At 76800 baud (8N2), one byte =
-# 11 bits.  The 9 LOW bits (start + 8 zero data) = 117µs break.
-# The 2 HIGH bits (stop bits) = 26µs MAB.  Both exceed DMX512 minimums
-# (88µs break, 8µs MAB).  This technique avoids set_break() USB control
-# transfers, keeping break+data on the same USB bulk pipe for consistent
-# timing.
-DMX_BREAK_BAUD = 76800
-DMX_BREAK_BYTE = b'\x00'
-DMX_DATA_BAUD = 250000
-
-
 def dmx_refresh_thread():
     """Background thread to continuously send DMX frames via ENTTEC and/or Art-Net."""
     refresh_interval = 1.0 / config.DMX_REFRESH_RATE
@@ -648,8 +636,7 @@ def dmx_refresh_thread():
     offline_backoff_max = 10.0
     _last_reinit_log = 0  # Throttle repetitive log messages
 
-    logger.info("DMX refresh thread started (%d Hz, %d visible channels)",
-                config.DMX_REFRESH_RATE, config.VISIBLE_CHANNELS)
+    logger.info("DMX refresh thread started (%d Hz)", config.DMX_REFRESH_RATE)
 
     while state.dmx_running:
         try:
@@ -658,29 +645,17 @@ def dmx_refresh_thread():
             with state.ftdi_lock:
                 device = state.ftdi_device
                 if device is not None:
-                    # Snapshot only the channels we need, under lock (fast)
-                    frame_len = config.VISIBLE_CHANNELS + 1
+                    # Snapshot full DMX universe under lock
                     with state.dmx_lock:
-                        frame = bytes(state.dmx_data[:frame_len])
+                        frame = bytes(state.dmx_data)
 
-                    # ── DMX512 frame: break + MAB + data ──────────
-                    #
-                    # "Slow baud break" technique:
-                    #   1. Switch to 76800 baud, send 0x00
-                    #      → 9 LOW bits = 117µs break, 2 HIGH bits = 26µs MAB
-                    #   2. Switch back to 250000 baud, send frame data
-                    #
-                    # This keeps break+data flowing through the same FTDI
-                    # TX FIFO / USB bulk pipe, giving deterministic timing
-                    # (unlike set_break which uses USB control transfers
-                    # with unpredictable latency relative to bulk writes).
-
-                    # Break: one 0x00 at slow baud
-                    device.set_baudrate(DMX_BREAK_BAUD)
-                    device.write_data(DMX_BREAK_BYTE)
-
-                    # Data: switch to DMX baud, send start code + channels
-                    device.set_baudrate(DMX_DATA_BAUD)
+                    # DMX512 break + MAB + data
+                    # Uses the FTDI hardware break (same as QLC+, pyopendmx,
+                    # and every major open-source DMX implementation).
+                    # USB round-trip latency (~1ms) naturally provides break
+                    # and MAB durations well within DMX512 spec limits.
+                    device.set_break(True)
+                    device.set_break(False)
                     device.write_data(frame)
 
                     consecutive_errors = 0
