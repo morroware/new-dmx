@@ -1,6 +1,6 @@
 # DMX Controller - General Purpose
 
-A Python-based DMX512 controller with a web interface for testing and controlling any DMX lighting fixture. Supports **ENTTEC Open DMX USB** and **Art-Net** output, unlimited named scenes, configurable channel counts and labels, and optional GPIO trigger/safety inputs on Raspberry Pi.
+A Python-based DMX512 controller with a web interface for testing and controlling any DMX lighting fixture. Supports **ENTTEC DMX USB Pro** (primary), **ENTTEC Open DMX USB** (fallback), and **Art-Net** output, unlimited named scenes, configurable channel counts and labels, and optional GPIO trigger/safety inputs on Raspberry Pi.
 
 ## Features
 
@@ -10,7 +10,8 @@ A Python-based DMX512 controller with a web interface for testing and controllin
 - **Unlimited Scenes** - Create, name, save, recall, and delete as many scenes as you need
 - **Art-Net Output** - Send DMX data over the network (UDP broadcast or unicast) alongside or instead of USB
 - **Art-Net Receiver** - Listen for incoming Art-Net and output via ENTTEC USB (Pi-to-Pi bridging)
-- **ENTTEC USB** - Direct DMX512 output via ENTTEC Open DMX USB (FTDI-based)
+- **ENTTEC DMX USB Pro** - Primary DMX512 output via ENTTEC Pro serial protocol (recommended)
+- **ENTTEC Open DMX USB** - Fallback DMX512 output via raw FTDI (legacy support)
 - **Trigger System** - Configurable trigger scene + idle scene with adjustable duration timer
 - **GPIO Support** - Optional contact closure trigger (pin 17) and safety switch (pin 27) on Raspberry Pi
 - **Emergency Blackout** - One-button kill to zero all channels
@@ -20,7 +21,7 @@ A Python-based DMX512 controller with a web interface for testing and controllin
 ## Hardware Requirements
 
 - **Raspberry Pi** (tested on Pi 4 & Pi 5) — or any Linux machine for USB/Art-Net only
-- **ENTTEC Open DMX USB** adapter (FTDI-based) — optional if using Art-Net only
+- **ENTTEC DMX USB Pro** (recommended) or **ENTTEC Open DMX USB** — optional if using Art-Net only
 - **DMX fixtures** (any DMX512-compatible lights, fog machines, etc.)
 - Standard USB and XLR DMX cables
 

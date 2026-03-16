@@ -1176,7 +1176,12 @@
 
                 // ENTTEC
                 const enttecEl = document.getElementById('enttec-status');
-                enttecEl.textContent = data.enttec_connected ? 'OK' : 'OFF';
+                if (data.enttec_connected) {
+                    const driverLabel = data.enttec_driver === 'enttec_pro' ? 'PRO' : data.enttec_driver === 'enttec_open' ? 'OPEN' : 'OK';
+                    enttecEl.textContent = driverLabel;
+                } else {
+                    enttecEl.textContent = 'OFF';
+                }
                 enttecEl.className = 'status-value ' + (data.enttec_connected ? 'online' : 'offline');
 
                 // DMX thread

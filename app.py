@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
 General-Purpose DMX512 Controller
-Supports ENTTEC Open DMX USB and Art-Net output.
-Configurable channels, unlimited named scenes, and web UI.
+Supports ENTTEC DMX USB Pro (primary), ENTTEC Open DMX USB (fallback),
+and Art-Net output.  Configurable channels, unlimited named scenes, and web UI.
 """
 
 from flask import Flask, jsonify, request, send_file
@@ -30,6 +30,16 @@ logging.basicConfig(
 )
 logger = logging.getLogger("dmx")
 
+# --- Serial (ENTTEC DMX USB Pro) ---
+try:
+    import serial
+    import serial.tools.list_ports
+    SERIAL_AVAILABLE = True
+except Exception as serial_import_error:
+    serial = None
+    SERIAL_AVAILABLE = False
+
+# --- PyFTDI (ENTTEC Open DMX USB fallback) ---
 try:
     from pyftdi.ftdi import Ftdi
     from pyftdi.usbtools import UsbTools
@@ -92,6 +102,11 @@ class Config:
     # DMX Settings
     DMX_CHANNELS = 512
     DMX_REFRESH_RATE = 40
+    # Driver selection: "auto" tries Pro first, then Open DMX USB.
+    # Force with "enttec_pro" or "enttec_open".
+    DMX_DRIVER = os.environ.get("DMX_DRIVER", "auto")
+    # Serial port for ENTTEC DMX USB Pro (auto-detected if empty)
+    DMX_SERIAL_PORT = os.environ.get("DMX_SERIAL_PORT", "")
     FTDI_URL = os.environ.get("DMX_FTDI_URL", "ftdi://0403:6001/1")
 
     # How many channels to show in the UI by default
@@ -233,8 +248,11 @@ class SystemState:
     """Global system state manager"""
 
     def __init__(self):
-        self.ftdi_device = None
-        self.ftdi_lock = Lock()  # Protects ftdi_device open/close/use
+        # DMX output device — exactly one of serial_device (Pro) or ftdi_device (Open) is active
+        self.serial_device = None       # pyserial Serial object (ENTTEC DMX USB Pro)
+        self.ftdi_device = None         # pyftdi Ftdi object (ENTTEC Open DMX USB)
+        self.dmx_driver = None          # "enttec_pro" | "enttec_open" | None
+        self.ftdi_lock = Lock()         # Protects both serial_device and ftdi_device
         self.dmx_data = bytearray([0] * (config.DMX_CHANNELS + 1))
         self.dmx_lock = Lock()
         self.current_scene = None
@@ -247,7 +265,7 @@ class SystemState:
         self.gpio_ready = False
         self.dmx_thread = None
         self.dmx_running = False
-        self.enttec_url = None
+        self.enttec_url = None          # FTDI URL or serial port path
         self.enttec_last_error = None
         # Art-Net
         self.artnet_socket = None
@@ -457,19 +475,151 @@ def stop_artnet_receiver():
 # ENTTEC DMX Functions
 # ============================================
 
-def _flush_usb_cache():
-    """Flush pyftdi's internal USB device cache to force fresh enumeration.
+# ENTTEC DMX USB Pro protocol constants
+ENTTEC_PRO_START = 0x7E
+ENTTEC_PRO_END = 0xE7
+ENTTEC_PRO_SEND_DMX = 6        # Label: Send DMX Packet
+ENTTEC_PRO_GET_PARAMS = 3      # Label: Get Widget Parameters
+ENTTEC_PRO_GET_SERIAL = 10     # Label: Get Widget Serial Number
+# FTDI VID:PID used by both Open DMX USB and DMX USB Pro
+ENTTEC_FTDI_VID = 0x0403
+ENTTEC_FTDI_PID = 0x6001
 
-    After a USB disconnect, pyftdi's UsbTools keeps stale device handles
-    which cause 'No such device' errors even after the device is plugged
-    back in.  Flushing the cache forces a clean re-scan.
+
+def _enttec_pro_packet(label, data=b''):
+    """Build an ENTTEC DMX USB Pro protocol packet.
+
+    Format: [0x7E] [Label] [Data Length LSB] [Data Length MSB] [Data...] [0xE7]
     """
+    length = len(data)
+    return bytes([ENTTEC_PRO_START, label, length & 0xFF, (length >> 8) & 0xFF]) + data + bytes([ENTTEC_PRO_END])
+
+
+def _find_enttec_pro_serial_ports():
+    """Find candidate serial ports for ENTTEC DMX USB Pro.
+
+    Returns a list of serial port paths, with explicitly configured port first.
+    """
+    ports = []
+    if config.DMX_SERIAL_PORT:
+        ports.append(config.DMX_SERIAL_PORT)
+
+    if not SERIAL_AVAILABLE:
+        return ports
+
+    # Scan for FTDI serial ports (ENTTEC DMX USB Pro appears as /dev/ttyUSB*)
+    try:
+        for port_info in serial.tools.list_ports.comports():
+            if port_info.vid == ENTTEC_FTDI_VID and port_info.pid == ENTTEC_FTDI_PID:
+                if port_info.device not in ports:
+                    ports.append(port_info.device)
+            elif port_info.vid == ENTTEC_FTDI_VID:
+                # Other FTDI PIDs (0x6014, etc.) — try them too
+                if port_info.device not in ports:
+                    ports.append(port_info.device)
+    except Exception as e:
+        logger.debug("Serial port enumeration failed: %s", e)
+
+    # Also try common paths as fallback
+    for fallback in ['/dev/ttyUSB0', '/dev/ttyUSB1', '/dev/ttyACM0']:
+        if fallback not in ports and os.path.exists(fallback):
+            ports.append(fallback)
+
+    return ports
+
+
+def _probe_enttec_pro(ser):
+    """Probe a serial port to check if an ENTTEC DMX USB Pro is connected.
+
+    Sends a "Get Widget Parameters" request and checks for a valid response.
+    Returns True if the device responds with the expected Pro protocol reply.
+    """
+    try:
+        # Flush any stale data
+        ser.reset_input_buffer()
+        ser.reset_output_buffer()
+
+        # Send Get Widget Parameters request (label 3, no data)
+        request = _enttec_pro_packet(ENTTEC_PRO_GET_PARAMS, b'\x00\x00')
+        ser.write(request)
+        ser.flush()
+
+        # Wait for response — Pro should reply within 100ms
+        time.sleep(0.1)
+
+        # Read available bytes
+        response = ser.read(ser.in_waiting or 64)
+        if len(response) < 5:
+            return False
+
+        # Check for valid Pro protocol response
+        # Response should start with 0x7E and have label 3
+        if response[0] == ENTTEC_PRO_START and response[1] == ENTTEC_PRO_GET_PARAMS:
+            data_len = response[2] | (response[3] << 8)
+            if len(response) >= 4 + data_len + 1 and response[4 + data_len] == ENTTEC_PRO_END:
+                logger.info("ENTTEC DMX USB Pro detected (firmware v%d.%d)",
+                           response[4] if data_len > 0 else 0,
+                           response[5] if data_len > 1 else 0)
+                return True
+
+        return False
+    except Exception as e:
+        logger.debug("Pro probe failed: %s", e)
+        return False
+
+
+def _init_enttec_pro():
+    """Initialize ENTTEC DMX USB Pro via serial port.
+
+    Caller must hold state.ftdi_lock.
+    Returns True on success.
+    """
+    if not SERIAL_AVAILABLE:
+        logger.debug("pyserial not available, cannot use ENTTEC DMX USB Pro")
+        return False
+
+    ports = _find_enttec_pro_serial_ports()
+    if not ports:
+        logger.debug("No candidate serial ports found for ENTTEC DMX USB Pro")
+        return False
+
+    logger.info("Searching for ENTTEC DMX USB Pro on %d serial port(s)...", len(ports))
+    for port_path in ports:
+        try:
+            logger.info("  Trying %s...", port_path)
+            ser = serial.Serial(
+                port=port_path,
+                baudrate=57600,         # Pro communicates at 57600 baud (not DMX 250k)
+                bytesize=serial.EIGHTBITS,
+                stopbits=serial.STOPBITS_ONE,
+                parity=serial.PARITY_NONE,
+                timeout=1.0,
+                write_timeout=1.0,
+            )
+
+            if _probe_enttec_pro(ser):
+                state.serial_device = ser
+                state.dmx_driver = "enttec_pro"
+                state.enttec_url = port_path
+                state.enttec_last_error = None
+                logger.info("ENTTEC DMX USB Pro initialized on %s", port_path)
+                return True
+            else:
+                ser.close()
+                logger.debug("  %s did not respond as DMX USB Pro", port_path)
+        except Exception as e:
+            logger.debug("  Failed to open %s: %s", port_path, e)
+
+    return False
+
+
+def _flush_usb_cache():
+    """Flush pyftdi's internal USB device cache to force fresh enumeration."""
     try:
         if UsbTools is not None:
             UsbTools.flush_cache()
     except Exception:
         pass
-    # Also release any lingering libusb references
     try:
         if UsbTools is not None:
             UsbTools.release_all_devices()
@@ -478,12 +628,7 @@ def _flush_usb_cache():
 
 
 def _disable_usb_autosuspend():
-    """Disable USB autosuspend for FTDI devices to prevent kernel-level disconnects.
-
-    The Linux kernel can put USB devices into suspend mode to save power,
-    which causes 'No such device' errors for devices that need continuous
-    communication like DMX controllers.
-    """
+    """Disable USB autosuspend for FTDI devices to prevent kernel-level disconnects."""
     try:
         for power_dir in glob.glob("/sys/bus/usb/devices/*/power"):
             try:
@@ -503,19 +648,19 @@ def _disable_usb_autosuspend():
                     with open(autosuspend_path, 'w') as f:
                         f.write("-1")
             except (PermissionError, OSError):
-                pass  # May not have write access; not fatal
+                pass
     except Exception:
         pass
 
 
-def init_enttec():
-    """Initialize ENTTEC Open DMX USB.
+def _init_enttec_open():
+    """Initialize ENTTEC Open DMX USB via pyftdi.
 
     Caller must hold state.ftdi_lock.
+    Returns True on success.
     """
     if not FTDI_AVAILABLE:
-        state.enttec_last_error = f"pyftdi unavailable: {ftdi_import_error}"
-        logger.error("%s", state.enttec_last_error)
+        logger.debug("pyftdi not available, cannot use ENTTEC Open DMX USB")
         return False
 
     def _candidate_urls(devices):
@@ -528,21 +673,19 @@ def init_enttec():
             "ftdi://0403:6001/2",
         ])
         for desc, _iface in devices:
-            serial = getattr(desc, 'sn', None)
-            if serial:
-                urls.append(f"ftdi://::{serial}/1")
-                urls.append(f"ftdi://::{serial}/2")
+            sn = getattr(desc, 'sn', None)
+            if sn:
+                urls.append(f"ftdi://::{sn}/1")
+                urls.append(f"ftdi://::{sn}/2")
         return list(dict.fromkeys(urls))
 
     try:
-        # Flush stale USB handles before scanning
         _flush_usb_cache()
 
-        logger.info("Initializing ENTTEC Open DMX USB...")
+        logger.info("Searching for ENTTEC Open DMX USB...")
         devices = Ftdi.list_devices()
         if not devices:
-            state.enttec_last_error = "No FTDI devices found"
-            logger.debug("No FTDI devices found (ENTTEC not connected)")
+            logger.debug("No FTDI devices found (ENTTEC Open DMX not connected)")
             return False
 
         logger.info("Found %d FTDI device(s)", len(devices))
@@ -559,6 +702,7 @@ def init_enttec():
                 ftdi = Ftdi()
                 ftdi.open_from_url(url)
                 state.ftdi_device = ftdi
+                state.dmx_driver = "enttec_open"
                 state.enttec_url = url
                 state.enttec_last_error = None
                 logger.info("Opened FTDI device with URL: %s", url)
@@ -580,50 +724,123 @@ def init_enttec():
         # Configure for DMX512
         state.ftdi_device.set_baudrate(250000)
         state.ftdi_device.set_line_property(8, 2, 'N')
-        state.ftdi_device.set_flowctrl('')     # Disable flow control (critical for DMX)
-        state.ftdi_device.set_latency_timer(2)  # 2ms latency (1ms can cause USB timeouts)
+        state.ftdi_device.set_flowctrl('')
+        state.ftdi_device.set_latency_timer(2)
         state.ftdi_device.purge_tx_buffer()
         state.ftdi_device.purge_rx_buffer()
 
-        # Set USB write timeout to prevent hangs on stale connections
         try:
             usb_dev = state.ftdi_device.usb_dev
             if usb_dev is not None:
-                usb_dev.default_timeout = 1000  # 1 second USB timeout
+                usb_dev.default_timeout = 1000
         except Exception:
-            pass  # Not all pyftdi versions expose usb_dev
+            pass
 
-        # Disable USB autosuspend for FTDI devices
         _disable_usb_autosuspend()
 
-        logger.info("ENTTEC initialized successfully")
+        logger.info("ENTTEC Open DMX USB initialized successfully")
         return True
 
     except Exception as e:
         state.enttec_last_error = str(e)
-        logger.error("Error initializing ENTTEC: %s", e)
+        logger.error("Error initializing ENTTEC Open DMX USB: %s", e)
         return False
 
 
+def init_enttec():
+    """Initialize the DMX USB interface.
+
+    Tries ENTTEC DMX USB Pro first (serial protocol), then falls back to
+    Open DMX USB (raw FTDI).  Override with DMX_DRIVER env var.
+
+    Caller must hold state.ftdi_lock.
+    """
+    driver = config.DMX_DRIVER.lower()
+
+    if driver == "enttec_pro":
+        # Force Pro only
+        if _init_enttec_pro():
+            return True
+        state.enttec_last_error = "ENTTEC DMX USB Pro not found (DMX_DRIVER=enttec_pro)"
+        logger.error("%s", state.enttec_last_error)
+        return False
+
+    if driver == "enttec_open":
+        # Force Open DMX only
+        if _init_enttec_open():
+            return True
+        state.enttec_last_error = "ENTTEC Open DMX USB not found (DMX_DRIVER=enttec_open)"
+        logger.error("%s", state.enttec_last_error)
+        return False
+
+    # Auto mode: try Pro first, then Open DMX
+    logger.info("Auto-detecting DMX USB interface...")
+
+    if _init_enttec_pro():
+        return True
+
+    logger.info("DMX USB Pro not found, trying Open DMX USB...")
+    if _init_enttec_open():
+        return True
+
+    state.enttec_last_error = "No DMX USB interface found (tried Pro and Open DMX)"
+    logger.warning("%s", state.enttec_last_error)
+    return False
+
+
+def _close_dmx_device():
+    """Close whatever DMX device is currently open. Caller must hold ftdi_lock."""
+    if state.serial_device is not None:
+        try:
+            state.serial_device.close()
+        except Exception:
+            pass
+        state.serial_device = None
+    if state.ftdi_device is not None:
+        try:
+            state.ftdi_device.close()
+        except Exception:
+            pass
+        state.ftdi_device = None
+    state.dmx_driver = None
+    state.enttec_url = None
+
+
+def _dmx_device_connected():
+    """Return True if any DMX USB device is currently open."""
+    return state.serial_device is not None or state.ftdi_device is not None
+
+
 def reinit_enttec():
-    """Safely close and re-initialize the ENTTEC.
+    """Safely close and re-initialize the DMX USB interface.
 
     Uses ftdi_lock to prevent the refresh thread from using a
     half-closed device.
     """
     with state.ftdi_lock:
         try:
-            if state.ftdi_device:
-                try:
-                    state.ftdi_device.close()
-                except Exception:
-                    pass
-                state.ftdi_device = None
-                state.enttec_url = None
+            _close_dmx_device()
             return init_enttec()
         except Exception as e:
-            logger.error("Error re-initializing ENTTEC: %s", e)
+            logger.error("Error re-initializing DMX USB: %s", e)
             return False
+
+
+def _send_dmx_frame(frame):
+    """Send a DMX frame using the active driver. Caller must hold ftdi_lock."""
+    if state.dmx_driver == "enttec_pro" and state.serial_device is not None:
+        # ENTTEC DMX USB Pro: wrap in Pro protocol packet
+        # Label 6 = Send DMX Packet, data = start code + channel data
+        packet = _enttec_pro_packet(ENTTEC_PRO_SEND_DMX, frame)
+        state.serial_device.write(packet)
+        state.serial_device.flush()
+    elif state.dmx_driver == "enttec_open" and state.ftdi_device is not None:
+        # ENTTEC Open DMX USB: raw FTDI break + data
+        state.ftdi_device.set_break(True)
+        state.ftdi_device.set_break(False)
+        state.ftdi_device.write_data(frame)
+    else:
+        raise RuntimeError("No DMX device connected")
 
 
 def dmx_refresh_thread():
@@ -634,34 +851,22 @@ def dmx_refresh_thread():
     REINIT_BACKOFF_BASE = 2.0
     offline_backoff = 1.0
     offline_backoff_max = 10.0
-    _last_reinit_log = 0  # Throttle repetitive log messages
+    _last_reinit_log = 0
 
     logger.info("DMX refresh thread started (%d Hz)", config.DMX_REFRESH_RATE)
 
     while state.dmx_running:
         try:
-            # Hold the ftdi_lock during the entire send so reinit_enttec()
-            # cannot close the device mid-write.
             with state.ftdi_lock:
-                device = state.ftdi_device
-                if device is not None:
-                    # Snapshot DMX data under lock.  Only send start code
-                    # + channels 1..VISIBLE_CHANNELS.  Shorter frames fit
-                    # in a single USB bulk transfer, avoiding FTDI TX FIFO
-                    # refill pauses that can cause framing errors on some
-                    # decoders.
+                if _dmx_device_connected():
+                    # Snapshot DMX data.  Only send start code + channels
+                    # 1..VISIBLE_CHANNELS.  For the Pro, shorter frames also
+                    # mean less USB overhead per packet.
                     frame_len = min(config.VISIBLE_CHANNELS + 1, 513)
                     with state.dmx_lock:
                         frame = bytes(state.dmx_data[:frame_len])
 
-                    # DMX512 break + MAB + data
-                    # Uses the FTDI hardware break (same as QLC+, pyopendmx,
-                    # and every major open-source DMX implementation).
-                    # USB round-trip latency (~1ms) naturally provides break
-                    # and MAB durations well within DMX512 spec limits.
-                    device.set_break(True)
-                    device.set_break(False)
-                    device.write_data(frame)
+                    _send_dmx_frame(frame)
 
                     consecutive_errors = 0
                     offline_backoff = 1.0
@@ -672,25 +877,23 @@ def dmx_refresh_thread():
                                consecutive_errors, MAX_ERRORS_BEFORE_REINIT, e)
                 time.sleep(0.1)
             else:
-                # Exponential backoff on re-init attempts, cap at 10s
                 backoff = min(REINIT_BACKOFF_BASE * (2 ** (consecutive_errors - MAX_ERRORS_BEFORE_REINIT - 1)), 10.0)
                 now = time.monotonic()
-                # Throttle log spam: only log every 30s after initial burst
                 if consecutive_errors <= MAX_ERRORS_BEFORE_REINIT + 3 or now - _last_reinit_log > 30:
-                    logger.warning("ENTTEC disconnected (%d failures). Retrying in %.1fs...",
+                    logger.warning("DMX USB disconnected (%d failures). Retrying in %.1fs...",
                                    consecutive_errors, backoff)
                     _last_reinit_log = now
                 time.sleep(backoff)
                 if reinit_enttec():
-                    logger.info("ENTTEC re-initialized successfully, resuming DMX output")
+                    logger.info("DMX USB re-initialized successfully, resuming output")
                     consecutive_errors = 0
 
-        # Always send Art-Net if enabled, regardless of ENTTEC status
+        # Always send Art-Net if enabled, regardless of USB status
         if config.ARTNET_ENABLED:
             send_artnet_frame()
 
-        # If no ENTTEC device and it's the only output, back off
-        if state.ftdi_device is None and not config.ARTNET_ENABLED:
+        # If no USB device and it's the only output, back off
+        if not _dmx_device_connected() and not config.ARTNET_ENABLED:
             time.sleep(offline_backoff)
             offline_backoff = min(offline_backoff * 2, offline_backoff_max)
             reinit_enttec()
@@ -1046,7 +1249,8 @@ def api_status():
     safety_switch_state = check_safety_switch_state()
 
     return jsonify({
-        'enttec_connected': state.ftdi_device is not None,
+        'enttec_connected': _dmx_device_connected(),
+        'enttec_driver': state.dmx_driver,
         'enttec_url': state.enttec_url,
         'enttec_last_error': state.enttec_last_error,
         'dmx_running': state.dmx_running and (state.dmx_thread is not None and state.dmx_thread.is_alive()),
@@ -1619,7 +1823,8 @@ def api_health():
     status_code = 200 if healthy else 503
     return jsonify({
         'status': 'ok' if healthy else 'degraded',
-        'enttec_connected': state.ftdi_device is not None,
+        'enttec_connected': _dmx_device_connected(),
+        'enttec_driver': state.dmx_driver,
         'enttec_url': state.enttec_url,
         'enttec_last_error': state.enttec_last_error,
         'dmx_running': healthy,
@@ -1710,13 +1915,7 @@ def _cleanup():
             state.trigger_timer.cancel()
 
     with state.ftdi_lock:
-        if state.ftdi_device:
-            try:
-                state.ftdi_device.close()
-            except Exception:
-                pass
-        state.ftdi_device = None
-        state.enttec_url = None
+        _close_dmx_device()
 
     if state.artnet_socket:
         try:
@@ -1777,10 +1976,12 @@ def _initialize():
     atexit.register(_cleanup)
 
     outputs = []
-    if state.ftdi_device is not None:
-        outputs.append("ENTTEC USB")
-    elif FTDI_AVAILABLE:
-        outputs.append("ENTTEC USB (retrying)")
+    if state.dmx_driver == "enttec_pro":
+        outputs.append(f"ENTTEC DMX USB Pro ({state.enttec_url})")
+    elif state.dmx_driver == "enttec_open":
+        outputs.append(f"ENTTEC Open DMX USB ({state.enttec_url})")
+    elif SERIAL_AVAILABLE or FTDI_AVAILABLE:
+        outputs.append("DMX USB (retrying)")
     if config.ARTNET_RECEIVER_ENABLED:
         outputs.append(f"Art-Net Receiver (universe {config.ARTNET_UNIVERSE})")
     elif config.ARTNET_ENABLED:
