@@ -653,8 +653,43 @@ def _disable_usb_autosuspend():
         pass
 
 
+def _unbind_ftdi_sio():
+    """Unbind the ftdi_sio kernel driver from FTDI USB interfaces.
+
+    When ftdi_sio is loaded (needed for DMX USB Pro), it claims all FTDI
+    devices and prevents pyftdi/libusb from opening them.  This function
+    detaches ftdi_sio from each bound USB interface via sysfs so that
+    pyftdi can claim the device for Open DMX USB mode.
+
+    Only affects the driver binding — does not unload the module, so a
+    subsequently plugged-in Pro will still get a serial port.
+    """
+    unbind_path = "/sys/bus/usb/drivers/ftdi_sio/unbind"
+    if not os.path.exists(unbind_path):
+        return  # ftdi_sio not loaded or no devices bound
+
+    driver_dir = "/sys/bus/usb/drivers/ftdi_sio"
+    try:
+        for entry in os.listdir(driver_dir):
+            # Bound USB interface entries look like "1-1.2:1.0"
+            if ':' not in entry:
+                continue
+            try:
+                with open(unbind_path, 'w') as f:
+                    f.write(entry)
+                logger.info("Unbound ftdi_sio from %s for pyftdi access", entry)
+            except (PermissionError, OSError) as e:
+                logger.warning("Could not unbind ftdi_sio from %s: %s", entry, e)
+    except Exception as e:
+        logger.debug("ftdi_sio unbind scan failed: %s", e)
+
+
 def _init_enttec_open():
     """Initialize ENTTEC Open DMX USB via pyftdi.
+
+    If the ftdi_sio kernel driver is bound to the FTDI device (e.g. in
+    auto mode where ftdi_sio is loaded for Pro support), this function
+    unbinds it first so that pyftdi/libusb can claim the device.
 
     Caller must hold state.ftdi_lock.
     Returns True on success.
@@ -680,6 +715,11 @@ def _init_enttec_open():
         return list(dict.fromkeys(urls))
 
     try:
+        # If ftdi_sio has the device, unbind it so pyftdi/libusb can claim it.
+        # This is the normal path in auto mode where ftdi_sio stays loaded for
+        # Pro support but the connected hardware turned out to be Open DMX.
+        _unbind_ftdi_sio()
+
         _flush_usb_cache()
 
         logger.info("Searching for ENTTEC Open DMX USB...")
@@ -714,8 +754,10 @@ def _init_enttec_open():
         if state.ftdi_device is None:
             hint = (
                 "Unable to open any detected FTDI device. "
-                "Make sure ftdi_sio is unloaded/blacklisted, udev permissions are set, "
-                "and DMX_FTDI_URL points at the correct adapter/interface."
+                "Check udev permissions (MODE=\"0666\" for FTDI VID/PID), "
+                "and verify DMX_FTDI_URL points at the correct adapter/interface. "
+                "If ftdi_sio is loaded, the app tried to unbind it automatically — "
+                "check the log above for permission errors."
             )
             state.enttec_last_error = f"{hint} Last error: {last_error}"
             logger.error("%s", state.enttec_last_error)

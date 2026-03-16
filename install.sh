@@ -68,25 +68,50 @@ apt-get install -y -qq \
 ok "System packages installed"
 
 # ------------------------------------------
-# 2. Kernel module handling for ENTTEC devices
+# 2. Kernel module policy for ENTTEC devices
 # ------------------------------------------
-# ENTTEC DMX USB Pro requires ftdi_sio (serial port driver) to be LOADED.
-# ENTTEC Open DMX USB requires ftdi_sio to be BLACKLISTED (uses pyftdi/libusb).
-# Default: leave ftdi_sio loaded (Pro is the primary/recommended controller).
-# Set DMX_DRIVER=enttec_open in /etc/dmx/dmx.env if using Open DMX USB.
+# ENTTEC DMX USB Pro  → needs ftdi_sio LOADED  (serial port /dev/ttyUSB*)
+# ENTTEC Open DMX USB → needs ftdi_sio BLACKLISTED (pyftdi via libusb)
+# auto mode           → ftdi_sio loaded; app unbinds it at runtime if
+#                       Open DMX fallback is needed
+#
+# Read the effective DMX_DRIVER from the env file (if it already exists from
+# a prior install) so we respect the user's choice on reinstall.
 MODPROBE_FILE="/etc/modprobe.d/ftdi-blacklist.conf"
-if [ -f "$MODPROBE_FILE" ]; then
-    info "Removing old ftdi_sio blacklist (ENTTEC DMX USB Pro needs ftdi_sio loaded)..."
-    rm -f "$MODPROBE_FILE"
-    ok "ftdi_sio blacklist removed — Pro will use /dev/ttyUSB*"
-else
-    ok "ftdi_sio not blacklisted (correct for ENTTEC DMX USB Pro)"
+_DMX_DRIVER="auto"
+if [ -f "/etc/dmx/dmx.env" ]; then
+    _DMX_DRIVER=$(grep -E '^DMX_DRIVER=' /etc/dmx/dmx.env 2>/dev/null | tail -1 | cut -d= -f2 | tr -d ' "'"'" | tr '[:upper:]' '[:lower:]')
+    [ -z "$_DMX_DRIVER" ] && _DMX_DRIVER="auto"
 fi
+info "DMX_DRIVER=${_DMX_DRIVER}"
 
-# Load ftdi_sio if not already loaded (needed for Pro)
-if ! lsmod | grep -q ftdi_sio; then
-    info "Loading ftdi_sio kernel module for ENTTEC DMX USB Pro..."
-    modprobe ftdi_sio 2>/dev/null || warn "Could not load ftdi_sio (may need a reboot)"
+if [ "$_DMX_DRIVER" = "enttec_open" ]; then
+    # Open DMX USB only — blacklist ftdi_sio so pyftdi can claim the device
+    info "Blacklisting ftdi_sio (required for ENTTEC Open DMX USB / pyftdi)..."
+    cat > "$MODPROBE_FILE" <<'BLACKLIST'
+# Prevent the kernel ftdi_sio driver from claiming ENTTEC / FTDI devices
+# so that pyftdi (userspace) can access them via libusb.
+# Remove this file and reboot if switching to ENTTEC DMX USB Pro.
+blacklist ftdi_sio
+BLACKLIST
+    ok "ftdi_sio blacklisted in ${MODPROBE_FILE}"
+    if lsmod | grep -q ftdi_sio; then
+        info "Unloading ftdi_sio kernel module..."
+        rmmod ftdi_sio 2>/dev/null || warn "Could not unload ftdi_sio (may need a reboot)"
+    fi
+else
+    # auto or enttec_pro — ftdi_sio must be loaded for serial port access.
+    # If a previous Open-DMX install left a blacklist, remove it.
+    if [ -f "$MODPROBE_FILE" ]; then
+        info "Removing ftdi_sio blacklist (not needed for ${_DMX_DRIVER} mode)..."
+        rm -f "$MODPROBE_FILE"
+        ok "ftdi_sio blacklist removed"
+    fi
+    if ! lsmod | grep -q ftdi_sio; then
+        info "Loading ftdi_sio kernel module..."
+        modprobe ftdi_sio 2>/dev/null || warn "Could not load ftdi_sio (may need a reboot)"
+    fi
+    ok "ftdi_sio loaded (Pro will use /dev/ttyUSB*; Open DMX unbinds at runtime if needed)"
 fi
 
 # ------------------------------------------
