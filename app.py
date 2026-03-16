@@ -645,9 +645,14 @@ def dmx_refresh_thread():
             with state.ftdi_lock:
                 device = state.ftdi_device
                 if device is not None:
-                    # Snapshot full DMX universe under lock
+                    # Snapshot DMX data under lock.  Only send start code
+                    # + channels 1..VISIBLE_CHANNELS.  Shorter frames fit
+                    # in a single USB bulk transfer, avoiding FTDI TX FIFO
+                    # refill pauses that can cause framing errors on some
+                    # decoders.
+                    frame_len = min(config.VISIBLE_CHANNELS + 1, 513)
                     with state.dmx_lock:
-                        frame = bytes(state.dmx_data)
+                        frame = bytes(state.dmx_data[:frame_len])
 
                     # DMX512 break + MAB + data
                     # Uses the FTDI hardware break (same as QLC+, pyopendmx,
