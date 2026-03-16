@@ -580,7 +580,10 @@ def init_enttec():
         # Configure for DMX512
         state.ftdi_device.set_baudrate(250000)
         state.ftdi_device.set_line_property(8, 2, 'N')
+        state.ftdi_device.set_flowctrl('')     # Disable flow control (critical for DMX)
         state.ftdi_device.set_latency_timer(2)  # 2ms latency (1ms can cause USB timeouts)
+        state.ftdi_device.purge_tx_buffer()
+        state.ftdi_device.purge_rx_buffer()
 
         # Set USB write timeout to prevent hangs on stale connections
         try:
@@ -623,16 +626,16 @@ def reinit_enttec():
             return False
 
 
-def _busy_wait_us(microseconds):
-    """Busy-wait for the given number of microseconds.
-
-    time.sleep() on Linux has ~1-15ms granularity which is far too coarse
-    for DMX512 break (88µs) and MAB (8µs) timing.  A busy-wait spin loop
-    using time.perf_counter() gives sub-microsecond precision.
-    """
-    end = time.perf_counter() + microseconds * 1e-6
-    while time.perf_counter() < end:
-        pass
+# DMX break baud rate: sending 0x00 at this rate produces a break via
+# the UART's start bit + data bits.  At 76800 baud (8N2), one byte =
+# 11 bits.  The 9 LOW bits (start + 8 zero data) = 117µs break.
+# The 2 HIGH bits (stop bits) = 26µs MAB.  Both exceed DMX512 minimums
+# (88µs break, 8µs MAB).  This technique avoids set_break() USB control
+# transfers, keeping break+data on the same USB bulk pipe for consistent
+# timing.
+DMX_BREAK_BAUD = 76800
+DMX_BREAK_BYTE = b'\x00'
+DMX_DATA_BAUD = 250000
 
 
 def dmx_refresh_thread():
@@ -645,13 +648,8 @@ def dmx_refresh_thread():
     offline_backoff_max = 10.0
     _last_reinit_log = 0  # Throttle repetitive log messages
 
-    # Only send channels we actually use.  Start code (byte 0) + channels
-    # 1..VISIBLE_CHANNELS.  Shorter frames = tighter timing and fewer
-    # opportunities for bit-level drift on the FTDI bit-bang output.
-    dmx_frame_len = config.VISIBLE_CHANNELS + 1  # +1 for start code byte 0
-
-    logger.info("DMX refresh thread started (%d Hz, %d-byte frames)",
-                config.DMX_REFRESH_RATE, dmx_frame_len)
+    logger.info("DMX refresh thread started (%d Hz, %d visible channels)",
+                config.DMX_REFRESH_RATE, config.VISIBLE_CHANNELS)
 
     while state.dmx_running:
         try:
@@ -665,11 +663,24 @@ def dmx_refresh_thread():
                     with state.dmx_lock:
                         frame = bytes(state.dmx_data[:frame_len])
 
-                    # DMX512 break + MAB + data  (busy-wait for µs precision)
-                    device.set_break(True)
-                    _busy_wait_us(120)   # break: spec min 88µs, we use 120µs for margin
-                    device.set_break(False)
-                    _busy_wait_us(12)    # MAB: spec min 8µs, we use 12µs for margin
+                    # ── DMX512 frame: break + MAB + data ──────────
+                    #
+                    # "Slow baud break" technique:
+                    #   1. Switch to 76800 baud, send 0x00
+                    #      → 9 LOW bits = 117µs break, 2 HIGH bits = 26µs MAB
+                    #   2. Switch back to 250000 baud, send frame data
+                    #
+                    # This keeps break+data flowing through the same FTDI
+                    # TX FIFO / USB bulk pipe, giving deterministic timing
+                    # (unlike set_break which uses USB control transfers
+                    # with unpredictable latency relative to bulk writes).
+
+                    # Break: one 0x00 at slow baud
+                    device.set_baudrate(DMX_BREAK_BAUD)
+                    device.write_data(DMX_BREAK_BYTE)
+
+                    # Data: switch to DMX baud, send start code + channels
+                    device.set_baudrate(DMX_DATA_BAUD)
                     device.write_data(frame)
 
                     consecutive_errors = 0
