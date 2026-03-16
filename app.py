@@ -91,7 +91,7 @@ class Config:
 
     # DMX Settings
     DMX_CHANNELS = 512
-    DMX_REFRESH_RATE = 44
+    DMX_REFRESH_RATE = 30
     FTDI_URL = os.environ.get("DMX_FTDI_URL", "ftdi://0403:6001/1")
 
     # How many channels to show in the UI by default
@@ -623,6 +623,18 @@ def reinit_enttec():
             return False
 
 
+def _busy_wait_us(microseconds):
+    """Busy-wait for the given number of microseconds.
+
+    time.sleep() on Linux has ~1-15ms granularity which is far too coarse
+    for DMX512 break (88µs) and MAB (8µs) timing.  A busy-wait spin loop
+    using time.perf_counter() gives sub-microsecond precision.
+    """
+    end = time.perf_counter() + microseconds * 1e-6
+    while time.perf_counter() < end:
+        pass
+
+
 def dmx_refresh_thread():
     """Background thread to continuously send DMX frames via ENTTEC and/or Art-Net."""
     refresh_interval = 1.0 / config.DMX_REFRESH_RATE
@@ -633,7 +645,13 @@ def dmx_refresh_thread():
     offline_backoff_max = 10.0
     _last_reinit_log = 0  # Throttle repetitive log messages
 
-    logger.info("DMX refresh thread started (%d Hz)", config.DMX_REFRESH_RATE)
+    # Only send channels we actually use.  Start code (byte 0) + channels
+    # 1..VISIBLE_CHANNELS.  Shorter frames = tighter timing and fewer
+    # opportunities for bit-level drift on the FTDI bit-bang output.
+    dmx_frame_len = config.VISIBLE_CHANNELS + 1  # +1 for start code byte 0
+
+    logger.info("DMX refresh thread started (%d Hz, %d-byte frames)",
+                config.DMX_REFRESH_RATE, dmx_frame_len)
 
     while state.dmx_running:
         try:
@@ -642,15 +660,16 @@ def dmx_refresh_thread():
             with state.ftdi_lock:
                 device = state.ftdi_device
                 if device is not None:
-                    # Snapshot DMX data under lock (fast)
+                    # Snapshot only the channels we need, under lock (fast)
+                    frame_len = config.VISIBLE_CHANNELS + 1
                     with state.dmx_lock:
-                        frame = bytes(state.dmx_data)
+                        frame = bytes(state.dmx_data[:frame_len])
 
-                    # DMX512 break + MAB + data
+                    # DMX512 break + MAB + data  (busy-wait for µs precision)
                     device.set_break(True)
-                    time.sleep(0.000088)  # break: 88µs minimum
+                    _busy_wait_us(120)   # break: spec min 88µs, we use 120µs for margin
                     device.set_break(False)
-                    time.sleep(0.000008)  # MAB: 8µs minimum
+                    _busy_wait_us(12)    # MAB: spec min 8µs, we use 12µs for margin
                     device.write_data(frame)
 
                     consecutive_errors = 0
