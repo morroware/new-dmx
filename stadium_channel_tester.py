@@ -182,7 +182,10 @@ class ChannelState:
         self.dmx.set_channel(channel, value)
 
     def set_multi(self, ch_dict):
-        """Set multiple channels and send to server."""
+        """Blackout all 512 channels, then set the given channels."""
+        self.dmx.blackout()
+        for ch in self.channels:
+            self.values[ch] = 0
         clamped = {ch: max(0, min(255, v)) for ch, v in ch_dict.items()}
         self.values.update(clamped)
         self.dmx.set_channels(clamped)
@@ -221,20 +224,23 @@ class ChannelState:
 
     def isolate_with_pins(self, channel, value):
         """
-        Set one channel to value, zero all non-pinned channels.
-        This is the key improvement: you can see dimmers/strobes work
-        because the pinned colour channels stay lit.
+        Set one channel to value, zero ALL 512 others, then restore pins.
+        Uses /api/test-channel (zeros entire DMX frame) as the foundation,
+        then layers pinned channels back on top via /api/channels.
         """
-        ch_dict = {}
+        # Step 1: zero all 512 channels, set target channel
+        self.dmx.isolate_channel(channel, value)
+
+        # Track local state
         for ch in self.channels:
-            if ch == channel:
-                ch_dict[ch] = value
-            elif ch in self.pinned:
-                ch_dict[ch] = self.pinned[ch]
-            else:
-                ch_dict[ch] = 0
-        self.values.update(ch_dict)
-        self.dmx.set_channels(ch_dict)
+            self.values[ch] = 0
+        self.values[channel] = value
+
+        # Step 2: restore pinned channels on top (skip if target is pinned)
+        pins_to_restore = {ch: v for ch, v in self.pinned.items() if ch != channel}
+        if pins_to_restore:
+            self.dmx.set_channels(pins_to_restore)
+            self.values.update(pins_to_restore)
 
 
 # ── Display helpers ───────────────────────────────────────────────────────────
