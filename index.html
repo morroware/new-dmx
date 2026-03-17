@@ -268,6 +268,19 @@
             font-size: 13px; z-index: 1100; letter-spacing: 0.5px;
         }
         .conn-banner.visible { display: block; }
+        .enttec-banner {
+            display: none; position: fixed; top: 0; left: 0; right: 0;
+            background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
+            color: white; text-align: center; padding: 10px; font-weight: 600;
+            font-size: 13px; z-index: 1050; letter-spacing: 0.5px;
+        }
+        .enttec-banner.visible { display: block; }
+        .enttec-banner button {
+            margin-left: 12px; padding: 4px 14px; font-size: 12px;
+            background: rgba(255,255,255,0.2); color: white; border: 1px solid rgba(255,255,255,0.4);
+            border-radius: 4px; cursor: pointer; text-transform: uppercase;
+        }
+        .enttec-banner button:hover { background: rgba(255,255,255,0.3); transform: none; }
         ::-webkit-scrollbar { width: 8px; height: 8px; }
         ::-webkit-scrollbar-track { background: #0f0f14; }
         ::-webkit-scrollbar-thumb { background: #3f3f46; border-radius: 4px; }
@@ -277,6 +290,11 @@
 <body>
     <!-- Connection lost banner -->
     <div class="conn-banner" id="conn-banner">CONNECTION LOST - Reconnecting...</div>
+    <!-- ENTTEC disconnected banner -->
+    <div class="enttec-banner" id="enttec-banner">
+        <span id="enttec-banner-text">ENTTEC DMX USB NOT CONNECTED</span>
+        <button onclick="reconnectEnttec()" id="reconnect-btn">Reconnect</button>
+    </div>
 
     <div class="container">
         <!-- Header -->
@@ -367,7 +385,7 @@
                         <button class="btn-primary btn-sm" onclick="saveScene()">Save Scene</button>
                     </div>
                     <p style="color: #71717a; font-size: 12px; margin-top: 8px;">
-                        Saves all 512 DMX channel values, not just visible channels.
+                        Saves the current state of all 512 DMX channels, not just the visible ones.
                     </p>
                 </div>
 
@@ -601,6 +619,53 @@
             banner.classList.add('visible');
         }
         connectionOk = ok;
+    }
+
+    // ============================================
+    // ENTTEC Connection Banner
+    // ============================================
+    let enttecConnected = false;
+
+    function setEnttecState(connected, errorMsg) {
+        const banner = document.getElementById('enttec-banner');
+        const textEl = document.getElementById('enttec-banner-text');
+        if (connected) {
+            banner.classList.remove('visible');
+            // Shift body padding back
+            document.body.style.paddingTop = '';
+            if (!enttecConnected) {
+                showToast('ENTTEC DMX USB connected');
+            }
+        } else {
+            const msg = errorMsg
+                ? `ENTTEC DMX USB NOT CONNECTED — ${errorMsg}`
+                : 'ENTTEC DMX USB NOT CONNECTED — Check USB cable';
+            textEl.textContent = msg;
+            banner.classList.add('visible');
+            document.body.style.paddingTop = '44px';
+        }
+        enttecConnected = connected;
+    }
+
+    function reconnectEnttec() {
+        const btn = document.getElementById('reconnect-btn');
+        btn.disabled = true;
+        btn.textContent = 'Reconnecting...';
+        fetch('/api/reconnect', {method: 'POST', headers})
+            .then(r => r.json().then(d => ({ok: r.ok, data: d})))
+            .then(({ok, data}) => {
+                if (ok) {
+                    showToast(`Connected: ${data.driver} on ${data.url}`);
+                    updateStatus();
+                } else {
+                    showToast(data.error || 'Reconnect failed', true);
+                }
+            })
+            .catch(err => showToast('Reconnect failed: ' + err.message, true))
+            .finally(() => {
+                btn.disabled = false;
+                btn.textContent = 'Reconnect';
+            });
     }
 
     // ============================================
@@ -1037,19 +1102,11 @@
         const id = name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
         if (!id) { showToast('Invalid scene name', true); return; }
 
-        // Capture all 512 channels, not just visible - read current values from
-        // the backend status for channels beyond the visible range
-        fetch('/api/status', {headers})
+        // Flush any pending slider updates, then fetch all 512 channels
+        // from the backend to ensure the scene captures the complete state.
+        flushPendingUpdates();
+        fetch('/api/channels/all-values', {headers})
             .then(r => r.json())
-            .then(statusData => {
-                const channels = {};
-                // Include visible channels from sliders (which may have unsent changes)
-                for (let ch = 1; ch <= visibleChannels; ch++) {
-                    const slider = document.getElementById(`ch-slider-${ch}`);
-                    if (slider) channels[ch] = parseInt(slider.value);
-                }
-                return channels;
-            })
             .then(channels => {
                 return fetch('/api/scenes', {
                     method: 'POST', headers,
@@ -1179,10 +1236,13 @@
                 if (data.enttec_connected) {
                     const driverLabel = data.enttec_driver === 'enttec_pro' ? 'PRO' : data.enttec_driver === 'enttec_open' ? 'OPEN' : 'OK';
                     enttecEl.textContent = driverLabel;
+                    enttecEl.title = data.enttec_url || '';
                 } else {
                     enttecEl.textContent = 'OFF';
+                    enttecEl.title = data.enttec_last_error || 'Not connected';
                 }
                 enttecEl.className = 'status-value ' + (data.enttec_connected ? 'online' : 'offline');
+                setEnttecState(data.enttec_connected, data.enttec_last_error);
 
                 // DMX thread
                 const dmxEl = document.getElementById('dmx-status');
