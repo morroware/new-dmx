@@ -583,7 +583,8 @@ def _init_enttec_pro():
     Returns True on success.
     """
     if not SERIAL_AVAILABLE:
-        logger.debug("pyserial not available, cannot use ENTTEC DMX USB Pro")
+        logger.info("pyserial not available — cannot probe for ENTTEC DMX USB Pro. "
+                     "Install with: pip install pyserial")
         return False
 
     ports = _find_enttec_pro_serial_ports()
@@ -614,11 +615,7 @@ def _init_enttec_pro():
                 return True
             else:
                 ser.close()
-                # Brief delay to let the FTDI chip and kernel driver stabilize
-                # after probing.  Without this, a subsequent pyftdi open (for
-                # Open DMX fallback) may find the device in a transient state.
-                time.sleep(0.3)
-                logger.debug("  %s did not respond as DMX USB Pro", port_path)
+                logger.info("  %s did not respond as DMX USB Pro", port_path)
         except Exception as e:
             logger.debug("  Failed to open %s: %s", port_path, e)
 
@@ -675,25 +672,43 @@ def _unbind_ftdi_sio():
 
     Only affects the driver binding — does not unload the module, so a
     subsequently plugged-in Pro will still get a serial port.
+
+    Returns True if at least one interface was successfully unbound.
     """
     unbind_path = "/sys/bus/usb/drivers/ftdi_sio/unbind"
     if not os.path.exists(unbind_path):
-        return  # ftdi_sio not loaded or no devices bound
+        logger.info("ftdi_sio not loaded or no devices bound (no unbind needed)")
+        return False
 
     driver_dir = "/sys/bus/usb/drivers/ftdi_sio"
+    unbound_any = False
     try:
-        for entry in os.listdir(driver_dir):
-            # Bound USB interface entries look like "1-1.2:1.0"
-            if ':' not in entry:
-                continue
+        entries = [e for e in os.listdir(driver_dir) if ':' in e]
+        if not entries:
+            logger.info("ftdi_sio loaded but no USB interfaces bound")
+            return False
+
+        logger.info("Found %d ftdi_sio binding(s) to release", len(entries))
+        for entry in entries:
             try:
                 with open(unbind_path, 'w') as f:
                     f.write(entry)
-                logger.info("Unbound ftdi_sio from %s for pyftdi access", entry)
-            except (PermissionError, OSError) as e:
-                logger.warning("Could not unbind ftdi_sio from %s: %s", entry, e)
+                logger.info("  Unbound ftdi_sio from %s", entry)
+                unbound_any = True
+            except PermissionError:
+                logger.warning("  Cannot unbind ftdi_sio from %s (need root). "
+                               "Try: sudo rmmod ftdi_sio  OR set "
+                               "DMX_DRIVER=enttec_open and re-run install.sh", entry)
+            except OSError as e:
+                logger.warning("  Cannot unbind ftdi_sio from %s: %s", entry, e)
     except Exception as e:
-        logger.debug("ftdi_sio unbind scan failed: %s", e)
+        logger.warning("ftdi_sio unbind scan failed: %s", e)
+
+    if unbound_any:
+        # Give the USB subsystem time to release the device
+        time.sleep(0.5)
+
+    return unbound_any
 
 
 def _init_enttec_open():
@@ -707,7 +722,12 @@ def _init_enttec_open():
     Returns True on success.
     """
     if not FTDI_AVAILABLE:
-        logger.debug("pyftdi not available, cannot use ENTTEC Open DMX USB")
+        logger.info("pyftdi not available — cannot use ENTTEC Open DMX USB. "
+                     "Install with: pip install pyftdi")
+        state.enttec_last_error = (
+            "pyftdi library not installed. "
+            "Run: pip install pyftdi   (or re-run install.sh)"
+        )
         return False
 
     def _candidate_urls(devices):
@@ -732,17 +752,56 @@ def _init_enttec_open():
         # Pro support but the connected hardware turned out to be Open DMX.
         _unbind_ftdi_sio()
 
-        # Give the USB subsystem time to fully release the device after
-        # unbinding ftdi_sio (and after any prior serial port close from
-        # the Pro probe).  Without this, pyftdi may fail to claim the device.
-        time.sleep(0.5)
-
         _flush_usb_cache()
 
+        # Enumerate FTDI devices.  After unbinding ftdi_sio (or after a prior
+        # serial port close from the Pro probe), the USB subsystem may need
+        # time to release the device.  Retry with increasing delays.
         logger.info("Searching for ENTTEC Open DMX USB...")
-        devices = Ftdi.list_devices()
+        devices = []
+        for attempt in range(4):
+            if attempt > 0:
+                delay = 0.3 * attempt  # 0.3s, 0.6s, 0.9s
+                logger.info("  FTDI enumeration retry %d (waiting %.1fs)...", attempt, delay)
+                time.sleep(delay)
+                _flush_usb_cache()
+            try:
+                devices = Ftdi.list_devices()
+            except Exception as enum_err:
+                logger.info("  FTDI enumeration attempt %d failed: %s", attempt + 1, enum_err)
+                continue
+            if devices:
+                break
+
         if not devices:
-            logger.debug("No FTDI devices found (ENTTEC Open DMX not connected)")
+            # Try to detect if the hardware is present at USB level even though
+            # pyftdi can't enumerate it (kernel driver may still be holding it).
+            usb_present = False
+            try:
+                import usb.core
+                ftdi_devs = list(usb.core.find(
+                    find_all=True, idVendor=ENTTEC_FTDI_VID))
+                if ftdi_devs:
+                    usb_present = True
+                    logger.info("  USB hardware detected (%d FTDI device(s)) but "
+                                "pyftdi cannot claim it — ftdi_sio may still be bound",
+                                len(ftdi_devs))
+            except Exception:
+                pass
+
+            if usb_present:
+                state.enttec_last_error = (
+                    "FTDI USB device detected but cannot be opened. "
+                    "The ftdi_sio kernel driver is likely still bound. "
+                    "Try: sudo rmmod ftdi_sio  OR set DMX_DRIVER=enttec_open "
+                    "and re-run install.sh to blacklist ftdi_sio."
+                )
+            else:
+                state.enttec_last_error = (
+                    "No FTDI USB devices found. Check that the ENTTEC Open DMX USB "
+                    "is plugged in and the USB cable is working."
+                )
+            logger.warning("%s", state.enttec_last_error)
             return False
 
         logger.info("Found %d FTDI device(s)", len(devices))
@@ -766,17 +825,15 @@ def _init_enttec_open():
                 break
             except Exception as e:
                 last_error = e
-                logger.debug("  FTDI open failed for %s: %s", url, e)
+                logger.info("  FTDI open failed for %s: %s", url, e)
 
         if state.ftdi_device is None:
-            hint = (
-                "Unable to open any detected FTDI device. "
-                "Check udev permissions (MODE=\"0666\" for FTDI VID/PID), "
-                "and verify DMX_FTDI_URL points at the correct adapter/interface. "
-                "If ftdi_sio is loaded, the app tried to unbind it automatically — "
-                "check the log above for permission errors."
+            state.enttec_last_error = (
+                "FTDI device(s) found but cannot open any of them. "
+                "Check udev permissions (MODE=\"0666\" for FTDI VID/PID) "
+                "and that ftdi_sio is unbound. "
+                f"Last error: {last_error}"
             )
-            state.enttec_last_error = f"{hint} Last error: {last_error}"
             logger.error("%s", state.enttec_last_error)
             return False
 
@@ -801,8 +858,8 @@ def _init_enttec_open():
         return True
 
     except Exception as e:
-        state.enttec_last_error = str(e)
-        logger.error("Error initializing ENTTEC Open DMX USB: %s", e)
+        state.enttec_last_error = f"Error initializing ENTTEC Open DMX USB: {e}"
+        logger.error("%s", state.enttec_last_error)
         return False
 
 
@@ -834,6 +891,8 @@ def init_enttec():
 
     # Auto mode: try Pro first, then Open DMX
     logger.info("Auto-detecting DMX USB interface...")
+    logger.info("  pyserial available: %s  |  pyftdi available: %s",
+                SERIAL_AVAILABLE, FTDI_AVAILABLE)
 
     if _init_enttec_pro():
         return True
@@ -842,7 +901,16 @@ def init_enttec():
     if _init_enttec_open():
         return True
 
-    state.enttec_last_error = "No DMX USB interface found (tried Pro and Open DMX)"
+    if not SERIAL_AVAILABLE and not FTDI_AVAILABLE:
+        state.enttec_last_error = (
+            "No DMX libraries installed. "
+            "Run: pip install pyserial pyftdi   (or re-run install.sh)"
+        )
+    else:
+        state.enttec_last_error = (
+            "No DMX USB interface found (tried Pro and Open DMX). "
+            "Check USB connection and logs for details."
+        )
     logger.warning("%s", state.enttec_last_error)
     return False
 
@@ -878,9 +946,12 @@ def reinit_enttec():
     """
     with state.ftdi_lock:
         try:
+            old_driver = state.dmx_driver
             _close_dmx_device()
+            logger.info("Re-initializing DMX USB (was: %s)...", old_driver or "disconnected")
             return init_enttec()
         except Exception as e:
+            state.enttec_last_error = f"Re-init failed: {e}"
             logger.error("Error re-initializing DMX USB: %s", e)
             return False
 
