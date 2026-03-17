@@ -529,12 +529,13 @@ def _find_enttec_pro_serial_ports():
     return ports
 
 
-def _probe_enttec_pro(ser, retries=3):
+def _probe_enttec_pro(ser, retries=2):
     """Probe a serial port to check if an ENTTEC DMX USB Pro is connected.
 
     Sends a "Get Widget Parameters" request and checks for a valid response.
-    Retries up to `retries` times with increasing delay to handle devices
-    that need a moment after USB enumeration.
+    Retries up to `retries` times to handle devices that need a moment after
+    USB enumeration.  Kept short to avoid disturbing Open DMX USB devices
+    (same FTDI VID:PID) that share the serial port in auto mode.
     Returns True if the device responds with the expected Pro protocol reply.
     """
     for attempt in range(retries):
@@ -548,8 +549,8 @@ def _probe_enttec_pro(ser, retries=3):
             ser.write(probe_request)
             ser.flush()
 
-            # Wait for response — increase wait on retries for slow devices
-            time.sleep(0.1 * (attempt + 1))
+            # Wait for response — Pro typically replies within 50-100ms
+            time.sleep(0.15)
 
             # Read available bytes
             response = ser.read(ser.in_waiting or 64)
@@ -571,8 +572,6 @@ def _probe_enttec_pro(ser, retries=3):
 
         except Exception as e:
             logger.debug("Pro probe attempt %d failed: %s", attempt + 1, e)
-            if attempt < retries - 1:
-                time.sleep(0.2)
 
     return False
 
@@ -615,6 +614,10 @@ def _init_enttec_pro():
                 return True
             else:
                 ser.close()
+                # Brief delay to let the FTDI chip and kernel driver stabilize
+                # after probing.  Without this, a subsequent pyftdi open (for
+                # Open DMX fallback) may find the device in a transient state.
+                time.sleep(0.3)
                 logger.debug("  %s did not respond as DMX USB Pro", port_path)
         except Exception as e:
             logger.debug("  Failed to open %s: %s", port_path, e)
@@ -728,6 +731,11 @@ def _init_enttec_open():
         # This is the normal path in auto mode where ftdi_sio stays loaded for
         # Pro support but the connected hardware turned out to be Open DMX.
         _unbind_ftdi_sio()
+
+        # Give the USB subsystem time to fully release the device after
+        # unbinding ftdi_sio (and after any prior serial port close from
+        # the Pro probe).  Without this, pyftdi may fail to claim the device.
+        time.sleep(0.5)
 
         _flush_usb_cache()
 
