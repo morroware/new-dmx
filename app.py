@@ -267,6 +267,8 @@ class SystemState:
         self.dmx_running = False
         self.enttec_url = None          # FTDI URL or serial port path
         self.enttec_last_error = None
+        # GPIO monitoring
+        self.gpio_running = False
         # Art-Net
         self.artnet_socket = None
         self.artnet_sequence = 0
@@ -289,8 +291,7 @@ def validate_ip_address(ip_str):
         ipaddress.ip_address(ip_str)
         return True
     except ValueError:
-        # Also allow broadcast "255.255.255.255"
-        return ip_str == "255.255.255.255"
+        return False
 
 # ============================================
 # Art-Net Functions
@@ -528,44 +529,52 @@ def _find_enttec_pro_serial_ports():
     return ports
 
 
-def _probe_enttec_pro(ser):
+def _probe_enttec_pro(ser, retries=3):
     """Probe a serial port to check if an ENTTEC DMX USB Pro is connected.
 
     Sends a "Get Widget Parameters" request and checks for a valid response.
+    Retries up to `retries` times with increasing delay to handle devices
+    that need a moment after USB enumeration.
     Returns True if the device responds with the expected Pro protocol reply.
     """
-    try:
-        # Flush any stale data
-        ser.reset_input_buffer()
-        ser.reset_output_buffer()
+    for attempt in range(retries):
+        try:
+            # Flush any stale data
+            ser.reset_input_buffer()
+            ser.reset_output_buffer()
 
-        # Send Get Widget Parameters request (label 3, no data)
-        request = _enttec_pro_packet(ENTTEC_PRO_GET_PARAMS, b'\x00\x00')
-        ser.write(request)
-        ser.flush()
+            # Send Get Widget Parameters request (label 3, no data)
+            probe_request = _enttec_pro_packet(ENTTEC_PRO_GET_PARAMS, b'\x00\x00')
+            ser.write(probe_request)
+            ser.flush()
 
-        # Wait for response — Pro should reply within 100ms
-        time.sleep(0.1)
+            # Wait for response — increase wait on retries for slow devices
+            time.sleep(0.1 * (attempt + 1))
 
-        # Read available bytes
-        response = ser.read(ser.in_waiting or 64)
-        if len(response) < 5:
-            return False
+            # Read available bytes
+            response = ser.read(ser.in_waiting or 64)
+            if len(response) < 5:
+                if attempt < retries - 1:
+                    logger.debug("Pro probe attempt %d: short response (%d bytes), retrying...",
+                                 attempt + 1, len(response))
+                continue
 
-        # Check for valid Pro protocol response
-        # Response should start with 0x7E and have label 3
-        if response[0] == ENTTEC_PRO_START and response[1] == ENTTEC_PRO_GET_PARAMS:
-            data_len = response[2] | (response[3] << 8)
-            if len(response) >= 4 + data_len + 1 and response[4 + data_len] == ENTTEC_PRO_END:
-                logger.info("ENTTEC DMX USB Pro detected (firmware v%d.%d)",
-                           response[4] if data_len > 0 else 0,
-                           response[5] if data_len > 1 else 0)
-                return True
+            # Check for valid Pro protocol response
+            # Response should start with 0x7E and have label 3
+            if response[0] == ENTTEC_PRO_START and response[1] == ENTTEC_PRO_GET_PARAMS:
+                data_len = response[2] | (response[3] << 8)
+                if len(response) >= 4 + data_len + 1 and response[4 + data_len] == ENTTEC_PRO_END:
+                    logger.info("ENTTEC DMX USB Pro detected (firmware v%d.%d)",
+                               response[4] if data_len > 0 else 0,
+                               response[5] if data_len > 1 else 0)
+                    return True
 
-        return False
-    except Exception as e:
-        logger.debug("Pro probe failed: %s", e)
-        return False
+        except Exception as e:
+            logger.debug("Pro probe attempt %d failed: %s", attempt + 1, e)
+            if attempt < retries - 1:
+                time.sleep(0.2)
+
+    return False
 
 
 def _init_enttec_pro():
@@ -885,6 +894,28 @@ def _send_dmx_frame(frame):
         raise RuntimeError("No DMX device connected")
 
 
+def _health_check_enttec_pro():
+    """Verify the ENTTEC DMX USB Pro is still responding.
+
+    Sends a Get Widget Parameters probe.  Returns True if the device
+    replies correctly, False otherwise.  Caller must hold ftdi_lock.
+    """
+    if state.dmx_driver != "enttec_pro" or state.serial_device is None:
+        return True  # Not using Pro, skip check
+    try:
+        state.serial_device.reset_input_buffer()
+        probe = _enttec_pro_packet(ENTTEC_PRO_GET_PARAMS, b'\x00\x00')
+        state.serial_device.write(probe)
+        state.serial_device.flush()
+        time.sleep(0.05)
+        response = state.serial_device.read(state.serial_device.in_waiting or 64)
+        if len(response) >= 5 and response[0] == ENTTEC_PRO_START and response[1] == ENTTEC_PRO_GET_PARAMS:
+            return True
+        return False
+    except Exception:
+        return False
+
+
 def dmx_refresh_thread():
     """Background thread to continuously send DMX frames via ENTTEC and/or Art-Net."""
     refresh_interval = 1.0 / config.DMX_REFRESH_RATE
@@ -894,6 +925,8 @@ def dmx_refresh_thread():
     offline_backoff = 1.0
     offline_backoff_max = 10.0
     _last_reinit_log = 0
+    _last_health_check = time.monotonic()
+    HEALTH_CHECK_INTERVAL = 10.0  # seconds between Pro health probes
 
     logger.info("DMX refresh thread started (%d Hz)", config.DMX_REFRESH_RATE)
 
@@ -901,17 +934,24 @@ def dmx_refresh_thread():
         try:
             with state.ftdi_lock:
                 if _dmx_device_connected():
-                    # Snapshot DMX data.  Only send start code + channels
-                    # 1..VISIBLE_CHANNELS.  For the Pro, shorter frames also
-                    # mean less USB overhead per packet.
-                    frame_len = min(config.VISIBLE_CHANNELS + 1, 513)
+                    # Always send the full 512-channel universe so that
+                    # scenes, test-channel, and Art-Net receiver data
+                    # beyond VISIBLE_CHANNELS are actually transmitted.
                     with state.dmx_lock:
-                        frame = bytes(state.dmx_data[:frame_len])
+                        frame = bytes(state.dmx_data[:513])
 
                     _send_dmx_frame(frame)
 
                     consecutive_errors = 0
                     offline_backoff = 1.0
+
+                    # Periodic health check for ENTTEC Pro
+                    now_hc = time.monotonic()
+                    if now_hc - _last_health_check >= HEALTH_CHECK_INTERVAL:
+                        _last_health_check = now_hc
+                        if not _health_check_enttec_pro():
+                            logger.warning("ENTTEC Pro health check failed - device may be unresponsive")
+                            raise RuntimeError("ENTTEC Pro health check failed")
         except Exception as e:
             consecutive_errors += 1
             if consecutive_errors <= MAX_ERRORS_BEFORE_REINIT:
@@ -996,10 +1036,19 @@ def apply_scene(scene_id, zero_unset=True):
 
 
 def get_current_channels():
-    """Get current DMX channel values as a dict of channel_number: value"""
+    """Get current DMX channel values for visible channels as a dict."""
     with state.dmx_lock:
         result = {}
         for i in range(1, config.VISIBLE_CHANNELS + 1):
+            result[i] = state.dmx_data[i]
+        return result
+
+
+def get_all_channels():
+    """Get all 512 DMX channel values as a dict (for scene saving)."""
+    with state.dmx_lock:
+        result = {}
+        for i in range(1, config.DMX_CHANNELS + 1):
             result[i] = state.dmx_data[i]
         return result
 
@@ -1450,6 +1499,12 @@ def api_set_channels():
     return jsonify({'success': True})
 
 
+@app.route('/api/channels/all-values', methods=['GET'])
+def api_get_all_channels():
+    """Get all 512 DMX channel values (used for scene saving)."""
+    return jsonify(get_all_channels())
+
+
 @app.route('/api/blackout', methods=['POST'])
 def api_blackout():
     with state.timer_lock:
@@ -1856,6 +1911,27 @@ def api_test_channel():
 
 
 # ============================================
+# ENTTEC Reconnect
+# ============================================
+
+@app.route('/api/reconnect', methods=['POST'])
+def api_reconnect():
+    """Manually trigger ENTTEC DMX USB reconnection."""
+    logger.info("Manual ENTTEC reconnection requested")
+    success = reinit_enttec()
+    if success:
+        return jsonify({
+            'success': True,
+            'driver': state.dmx_driver,
+            'url': state.enttec_url,
+        })
+    return jsonify({
+        'success': False,
+        'error': state.enttec_last_error or 'No DMX USB device found',
+    }), 503
+
+
+# ============================================
 # Health Check
 # ============================================
 
@@ -1893,7 +1969,7 @@ def _gpio_monitor():
     consecutive_errors = 0
     max_errors_before_reinit = 3
 
-    while state.dmx_running:
+    while state.gpio_running:
         try:
             if not state.gpio_ready:
                 if init_gpio():
@@ -1950,6 +2026,7 @@ def _cleanup():
     _initialized = False
 
     logger.info("Shutting down DMX controller...")
+    state.gpio_running = False
     stop_dmx_refresh()
 
     with state.timer_lock:
@@ -2013,6 +2090,7 @@ def _initialize():
     init_gpio()
 
     if GPIO_AVAILABLE:
+        state.gpio_running = True
         Thread(target=_gpio_monitor, daemon=True).start()
 
     atexit.register(_cleanup)
