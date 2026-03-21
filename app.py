@@ -989,7 +989,9 @@ def _health_check_enttec_pro():
         probe = _enttec_pro_packet(ENTTEC_PRO_GET_PARAMS, b'\x00\x00')
         state.serial_device.write(probe)
         state.serial_device.flush()
-        time.sleep(0.05)
+        # Pro typically responds within 50-100ms; use 150ms to match the
+        # probe timing and avoid false negatives under load.
+        time.sleep(0.15)
         response = state.serial_device.read(state.serial_device.in_waiting or 64)
         if len(response) >= 5 and response[0] == ENTTEC_PRO_START and response[1] == ENTTEC_PRO_GET_PARAMS:
             return True
@@ -1736,6 +1738,38 @@ def api_set_channel_labels():
 
     save_config()
     return jsonify({'success': True, 'labels': {str(k): v for k, v in config.CHANNEL_LABELS.items()}})
+
+
+@app.route('/api/config/reset', methods=['POST'])
+def api_reset_config():
+    """Reset configuration to factory defaults.
+
+    This clears the persisted config file and restores the built-in
+    defaults for channel labels, visible channels, etc.  Useful when
+    the saved config has a stale decoder layout that overrides the
+    correct defaults.
+    """
+    # Restore defaults from the Config class definition
+    config.VISIBLE_CHANNELS = Config.VISIBLE_CHANNELS
+    config.CHANNEL_LABELS = dict(Config.CHANNEL_LABELS)
+    config.TRIGGER_DURATION = 10.0
+    config.TRIGGER_SCENE = None
+    config.IDLE_SCENE = None
+    config.SCENES = {}
+
+    # Blackout all channels
+    with state.dmx_lock:
+        for i in range(len(state.dmx_data)):
+            state.dmx_data[i] = 0
+
+    save_config()
+    logger.info("Configuration reset to factory defaults")
+    return jsonify({
+        'success': True,
+        'visible_channels': config.VISIBLE_CHANNELS,
+        'channel_labels': {str(k): v for k, v in config.CHANNEL_LABELS.items()},
+    })
+
 
 # ============================================
 # Fixture Profiles
