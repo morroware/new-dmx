@@ -109,9 +109,10 @@ class Config:
     DMX_SERIAL_PORT = os.environ.get("DMX_SERIAL_PORT", "")
     FTDI_URL = os.environ.get("DMX_FTDI_URL", "ftdi://0403:6001/1")
 
-    # How many channels to show in the UI by default
-    # 20 channels covers 4x Stadium Pro III RGBW fixtures (ch 5-20)
-    VISIBLE_CHANNELS = 20
+    # How many channels to show in the UI by default.
+    # 32 channels covers 4 fixtures in up to 8ch mode (4 × 8 = 32).
+    # Run  python3 diagnose_decoder.py  to auto-detect channel layout.
+    VISIBLE_CHANNELS = 32
 
     # Art-Net settings
     ARTNET_ENABLED = os.environ.get("DMX_ARTNET_ENABLED", "false").lower() in ("1", "true", "yes")
@@ -134,13 +135,15 @@ class Config:
 
     # Channel labels — user-customizable names for each channel number.
     # Any channel not listed here is shown as "Channel N".
-    # Default: 4x Stadium Pro III 1200W RGBW fixtures starting at ch 5.
-    # Channels 1-4 are reserved by the decoders (do not set to 255).
+    #
+    # Default: 4x Stadium Pro III 1200W RGBW fixtures, 4ch direct mode,
+    # starting at address 1.  If your decoder uses a different mode
+    # (6ch or 8ch), run:  python3 diagnose_decoder.py
     CHANNEL_LABELS = {
-        5: 'F1 Red', 6: 'F1 Green', 7: 'F1 Blue', 8: 'F1 White',
-        9: 'F2 Red', 10: 'F2 Green', 11: 'F2 Blue', 12: 'F2 White',
-        13: 'F3 Red', 14: 'F3 Green', 15: 'F3 Blue', 16: 'F3 White',
-        17: 'F4 Red', 18: 'F4 Green', 19: 'F4 Blue', 20: 'F4 White',
+        1: 'F1 Red', 2: 'F1 Green', 3: 'F1 Blue', 4: 'F1 White',
+        5: 'F2 Red', 6: 'F2 Green', 7: 'F2 Blue', 8: 'F2 White',
+        9: 'F3 Red', 10: 'F3 Green', 11: 'F3 Blue', 12: 'F3 White',
+        13: 'F4 Red', 14: 'F4 Green', 15: 'F4 Blue', 16: 'F4 White',
     }
 
     # Scenes — unlimited named scenes stored as {id: {name, channels}}
@@ -1880,17 +1883,24 @@ FIXTURE_PROFILES = {
         },
     },
     # ── Stadium Pro III 1200W RGBW (RuggedGrade / LEDLightExpert) ────
-    # HB-320CE-60 BH DMX decoders, one per fixture, 4ch RGBW each.
-    # Channels 1-4 are unused/reserved (255 = blackout on the decoder).
-    # Actual RGBW starts at channel 5 for the first fixture.
-    # Discovered layout:
-    #   Fixture 1: ch 5-8   (R,G,B,W)
-    #   Fixture 2: ch 9-12  (R,G,B,W)
-    #   Fixture 3: ch 13-16 (R,G,B,W)
-    #   Fixture 4: ch 17-20 (R,G,B,W)
-    # Use start_address=5, fixture_count=4 when applying.
+    # These fixtures use external RGBW DMX decoders.  The decoder's DIP
+    # switches or buttons determine the channel mode.  Common modes:
+    #
+    #   4ch direct:  R, G, B, W  (decoder in 4CH/RGBW mode)
+    #   6ch:         Dimmer, R, G, B, W, Strobe
+    #   8ch:         Dimmer, R, G, B, W, Strobe, Mode, Speed
+    #   8ch alt:     Mode, Dimmer, R, G, B, W, Strobe, Speed
+    #
+    # Run  python3 diagnose_decoder.py  to auto-detect your decoder's
+    # channel layout if colors aren't responding correctly.
+    #
+    # IMPORTANT: Set your decoder's DMX start address to 001 (all DIP
+    # switches off/down) unless you intentionally offset it.
+
+    # 4ch direct — simplest mode, most common on basic decoders
+    # Use start_address=1 (or wherever the decoder address is set)
     'stadium-pro-iii-rgbw-4ch': {
-        'name': 'Stadium Pro III 1200W RGBW (4ch)',
+        'name': 'Stadium Pro III 1200W RGBW – 4ch Direct',
         'manufacturer': 'RuggedGrade',
         'channels_per_fixture': 4,
         'channel_map': {
@@ -1898,6 +1908,53 @@ FIXTURE_PROFILES = {
             2: 'Green',
             3: 'Blue',
             4: 'White',
+        },
+    },
+    # 6ch mode — adds master dimmer + strobe
+    # Dimmer MUST be >0 or RGBW won't light up!
+    'stadium-pro-iii-6ch': {
+        'name': 'Stadium Pro III 1200W RGBW – 6ch (Dim+RGBW+Strobe)',
+        'manufacturer': 'RuggedGrade',
+        'channels_per_fixture': 6,
+        'channel_map': {
+            1: 'Dimmer',
+            2: 'Red',
+            3: 'Green',
+            4: 'Blue',
+            5: 'White',
+            6: 'Strobe',
+        },
+    },
+    # 8ch full — dimmer, RGBW, strobe, mode, speed
+    'stadium-pro-iii-8ch': {
+        'name': 'Stadium Pro III 1200W RGBW – 8ch (Dim+RGBW+Strobe+Mode+Speed)',
+        'manufacturer': 'RuggedGrade',
+        'channels_per_fixture': 8,
+        'channel_map': {
+            1: 'Dimmer',
+            2: 'Red',
+            3: 'Green',
+            4: 'Blue',
+            5: 'White',
+            6: 'Strobe',
+            7: 'Mode',
+            8: 'Speed',
+        },
+    },
+    # 8ch alt — mode channel first (some decoders use this order)
+    'stadium-pro-iii-8ch-alt': {
+        'name': 'Stadium Pro III 1200W RGBW – 8ch Alt (Mode+Dim+RGBW+Strobe+Speed)',
+        'manufacturer': 'RuggedGrade',
+        'channels_per_fixture': 8,
+        'channel_map': {
+            1: 'Mode',
+            2: 'Dimmer',
+            3: 'Red',
+            4: 'Green',
+            5: 'Blue',
+            6: 'White',
+            7: 'Strobe',
+            8: 'Speed',
         },
     },
 }
