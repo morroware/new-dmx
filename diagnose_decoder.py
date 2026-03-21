@@ -160,6 +160,15 @@ class DMX:
             timeout=5,
         ).raise_for_status()
 
+    def reset_config(self):
+        """Reset server config to factory defaults (clears stale persisted config)."""
+        try:
+            r = self.s.post(f"{self.url}/api/config/reset", timeout=5)
+            r.raise_for_status()
+            return r.json()
+        except Exception:
+            return None
+
     def apply_profile(self, profile_id, start_address=1, fixture_count=1):
         r = self.s.post(
             f"{self.url}/api/fixture-profiles/apply",
@@ -190,6 +199,74 @@ def ask_color(expected):
     return expected.lower() in ans
 
 
+# ── Quick mode ───────────────────────────────────────────────────────────────
+
+def run_quick_mode(dmx, fixture_count):
+    """Cycle through each layout showing RED for 3 seconds each.
+
+    The user watches and tells us which one lit up red (or any light at all).
+    Much faster than the full interactive test.
+    """
+    header("QUICK MODE — Watch for RED light")
+    print()
+    info("I'll cycle through each layout for 3 seconds each.")
+    info("Watch the fixture and note which number lights up RED.")
+    print()
+
+    for i, layout in enumerate(LAYOUTS, 1):
+        dmx.blackout()
+        time.sleep(0.3)
+
+        ch_dict = dict(layout["setup"])
+        ch_dict[layout["red"]] = 255
+
+        print(c(f"  [{i}/{len(LAYOUTS)}] {layout['name']}", BOLD, YELLOW))
+        info(f"Channels: {ch_dict}")
+        dmx.set_channels(ch_dict)
+        time.sleep(3.0)
+
+    dmx.blackout()
+
+    print()
+    header("Which layout produced RED light?")
+    for i, layout in enumerate(LAYOUTS, 1):
+        print(f"  {i}) {layout['name']}")
+    print(f"  0) None of them worked")
+    print()
+
+    while True:
+        try:
+            choice = int(input(c("  → Enter number: ", CYAN)).strip())
+        except (ValueError, KeyboardInterrupt, EOFError):
+            choice = -1
+        if 0 <= choice <= len(LAYOUTS):
+            break
+        print("    Invalid choice, try again.")
+
+    if choice == 0:
+        header("NO MATCHING LAYOUT FOUND")
+        print()
+        warn("None of the common layouts matched your decoder.")
+        info("Try the full interactive mode (without --quick) for more options,")
+        info("or check your decoder's DIP switches and wiring.")
+        return
+
+    winner = LAYOUTS[choice - 1]
+    header(f"SELECTED: {winner['name']}")
+
+    if yesno(f"Apply this profile for {fixture_count} fixture(s)?"):
+        try:
+            result = dmx.apply_profile(
+                winner["profile_id"],
+                start_address=winner["start_address"],
+                fixture_count=fixture_count,
+            )
+            ok("Profile applied!")
+            ok(f"Visible channels: {result.get('visible_channels', '?')}")
+        except Exception as e:
+            err(f"Failed to apply profile: {e}")
+
+
 # ── Main ─────────────────────────────────────────────────────────────────────
 
 def main():
@@ -198,6 +275,8 @@ def main():
     parser.add_argument("--port", default="5000", help="DMX server port")
     parser.add_argument("--fixtures", type=int, default=4,
                         help="Number of fixtures to configure after detection (default: 4)")
+    parser.add_argument("--quick", action="store_true",
+                        help="Quick mode: cycle through layouts showing RED only, 3s each")
     args = parser.parse_args()
 
     base_url = f"http://{args.host}:{args.port}"
@@ -213,13 +292,23 @@ def main():
         err("Make sure app.py is running.")
         sys.exit(1)
 
-    ok(f"Connected — DMX {'online' if health.get('dmx_connected') else 'OFFLINE'}")
+    driver = health.get("dmx_driver", "unknown")
+    ok(f"Connected — DMX {'online' if health.get('dmx_connected') else 'OFFLINE'} (driver: {driver})")
 
     if not health.get("dmx_connected"):
         warn("DMX hardware not connected! The test will still run but")
         warn("no signal will reach the fixture. Connect your ENTTEC adapter first.")
         if not yesno("Continue anyway?"):
             sys.exit(0)
+
+    # ── Reset persisted config to avoid stale channel mappings ──
+    print()
+    info("Resetting server config to factory defaults...")
+    reset_result = dmx.reset_config()
+    if reset_result and reset_result.get("success"):
+        ok("Config reset — stale channel mappings cleared")
+    else:
+        warn("Could not reset config (may be running older server version)")
 
     print()
     info("This will test common RGBW decoder channel layouts.")
@@ -228,12 +317,17 @@ def main():
     print()
     info("Make sure:")
     info("  1. The light is powered on")
-    info("  2. DMX cable is connected from ENTTEC to the decoder")
-    info("  3. You can see the light from where you are")
+    info("  2. DMX cable is connected (ENTTEC → decoder → fixture)")
+    info("  3. Decoder DIP switches set to address 001")
+    info("  4. You can see the light from where you are")
     print()
 
     if not yesno("Ready to begin?"):
         sys.exit(0)
+
+    # ── Quick mode: just blast RED on each layout, user picks ──
+    if args.quick:
+        return run_quick_mode(dmx, args.fixtures)
 
     # ── Test each layout ─────────────────────────────────────────
     winner = None
