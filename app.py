@@ -110,9 +110,11 @@ class Config:
     FTDI_URL = os.environ.get("DMX_FTDI_URL", "ftdi://0403:6001/1")
 
     # How many channels to show in the UI by default.
-    # 32 channels covers 4 fixtures in up to 8ch mode (4 × 8 = 32).
+    # 16 channels covers 4 RuggedGrade 1200W RGB Stadium Lights in 4ch
+    # RGBW mode (4 fixtures × 4 channels = 16).  Increase to 400 for
+    # the full 100-fixture capacity shown in the channel guide.
     # Run  python3 diagnose_decoder.py  to auto-detect channel layout.
-    VISIBLE_CHANNELS = 32
+    VISIBLE_CHANNELS = 16
 
     # Art-Net settings
     ARTNET_ENABLED = os.environ.get("DMX_ARTNET_ENABLED", "false").lower() in ("1", "true", "yes")
@@ -136,9 +138,11 @@ class Config:
     # Channel labels — user-customizable names for each channel number.
     # Any channel not listed here is shown as "Channel N".
     #
-    # Default: 4x Stadium Pro III 1200W RGBW fixtures, 4ch direct mode,
-    # starting at address 1.  If your decoder uses a different mode
-    # (6ch or 8ch), run:  python3 diagnose_decoder.py
+    # Default: 4x RuggedGrade 1200W RGB Stadium Lights, 4ch RGBW mode,
+    # starting at address 1.  Per the channel guide each fixture uses
+    # 4 channels (Red, Green, Blue, White) with addresses incrementing
+    # by 4.  Apply the 'ruggedgrade-1200w-rgb-stadium-4ch' fixture
+    # profile via the UI to reconfigure for a different fixture count.
     CHANNEL_LABELS = {
         1: 'F1 Red', 2: 'F1 Green', 3: 'F1 Blue', 4: 'F1 White',
         5: 'F2 Red', 6: 'F2 Green', 7: 'F2 Blue', 8: 'F2 White',
@@ -1916,6 +1920,45 @@ FIXTURE_PROFILES = {
             12: 'Control/Reset',
         },
     },
+    # ── RuggedGrade 1200W RGB Stadium Light ──────────────────────────
+    # 4-channel RGBW fixtures.  Each fixture occupies 4 consecutive DMX
+    # channels: Red, Green, Blue, White.  Addresses increment by 4:
+    #
+    #   Fixture 1#  → Address   1  (R=1,   G=2,   B=3,   W=4)
+    #   Fixture 2#  → Address   5  (R=5,   G=6,   B=7,   W=8)
+    #   ...
+    #   Fixture 100# → Address 397 (R=397, G=398, B=399, W=400)
+    #
+    # Supports up to 100 fixtures on a single DMX universe (400 of 512 channels).
+    #
+    # Product warnings from the channel guide:
+    #   - Turn off power before install or changing assembly parts
+    #   - Input voltage and lamps must be matched
+    #   - Wiring section must be insulated
+    #   - Professionals must install and disassemble
+    #   - Surge protection required: outdoor = fixture + pole + breaker,
+    #     indoor = fixture + breaker
+    #
+    # Troubleshooting:
+    #   Light flickers → Check wiring, confirm steady input voltage,
+    #     cover photocell if present to rule out ambient-light triggering
+    #   Light does not work → Check wiring, confirm input voltage is in
+    #     the fixture's accepted range; call Tech Support if unresolved
+    #
+    # This is the DEFAULT and RECOMMENDED profile for this project.
+
+    'ruggedgrade-1200w-rgb-stadium-4ch': {
+        'name': 'RuggedGrade 1200W RGB Stadium Light – 4ch RGBW',
+        'manufacturer': 'RuggedGrade',
+        'channels_per_fixture': 4,
+        'channel_map': {
+            1: 'Red',
+            2: 'Green',
+            3: 'Blue',
+            4: 'White',
+        },
+    },
+
     # ── Stadium Pro III 1200W RGBW (RuggedGrade / LEDLightExpert) ────
     # These fixtures use external RGBW DMX decoders.  The decoder's DIP
     # switches or buttons determine the channel mode.  Common modes:
