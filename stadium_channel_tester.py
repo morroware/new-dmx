@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-Stadium Pro III 1200W RGBW – Channel Discovery Tool
-====================================================
+RuggedGrade 1200W RGB Stadium Light – Channel Discovery Tool
+=============================================================
 Walks you through every DMX channel at multiple intensity levels so you can
-figure out what each channel does on a fixture with no documentation.
+figure out what each channel does on a fixture when colors don't match.
 
 Key features:
   - Guided walk-through: steps each channel through 5 levels (0→64→128→192→255)

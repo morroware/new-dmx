@@ -1,17 +1,21 @@
 #!/usr/bin/env python3
 """
-Stadium Pro III 1200W RGBW – Decoder Auto-Diagnostic
-=====================================================
-Automatically tests common RGBW DMX decoder channel layouts to find
-which one your decoder is using.  No manual input needed during each
-test — just watch the light and answer simple questions.
+RuggedGrade 1200W RGB Stadium Light – Channel Diagnostic
+=========================================================
+Automatically tests common RGBW DMX channel layouts to find which one
+your light is using.  No manual input needed during each test — just
+watch the light and answer simple questions.
 
-Common decoder layouts tested:
-  A) 4ch direct at addr 1:  ch1=R, ch2=G, ch3=B, ch4=W
-  B) 4ch offset at addr 5:  ch5=R, ch6=G, ch7=B, ch8=W  (current default)
+Default light: RuggedGrade 1200W RGB Stadium Light (4ch RGBW per fixture)
+Also supports Stadium Pro III with external decoders (4ch/6ch/8ch modes).
+
+Common layouts tested (in order):
+  A) 4ch direct at addr 1:  ch1=R, ch2=G, ch3=B, ch4=W  (RuggedGrade default)
+  B) 4ch direct at addr 5:  ch5=R, ch6=G, ch7=B, ch8=W
   C) 6ch dimmer-first:      ch1=Dim, ch2=R, ch3=G, ch4=B, ch5=W, ch6=Strobe
-  D) 8ch full-feature:      ch1=Dim, ch2=R, ch3=G, ch4=B, ch5=W, ch6=Strobe, ch7=Mode, ch8=Speed
-  E) 8ch mode-first:        ch1=Mode, ch2=Dim, ch3=R, ch4=G, ch5=B, ch6=W, ch7=Strobe, ch8=Speed
+  D) 5ch dimmer-first:      ch1=Dim, ch2=R, ch3=G, ch4=B, ch5=W
+  E) 8ch full-feature:      ch1=Dim, ch2=R, ch3=G, ch4=B, ch5=W, ch6=Strobe, ch7=Mode, ch8=Speed
+  F) 8ch mode-first:        ch1=Mode, ch2=Dim, ch3=R, ch4=G, ch5=B, ch6=W, ch7=Strobe, ch8=Speed
 
 For each layout the script lights up what *should* be red, then green,
 then blue, then white — and asks you to confirm.
@@ -68,10 +72,11 @@ def info(txt): print(c(f"  · {txt}", DIM))
 #   channels_per_fixture:  Total channels this layout consumes per fixture
 
 LAYOUTS = [
+    # ── RuggedGrade 1200W RGB Stadium Light (default) ────────────
     {
-        "id": "4ch-addr1",
-        "name": "4ch Direct @ Address 1  (ch1=R, ch2=G, ch3=B, ch4=W)",
-        "profile_id": "generic-rgbw-4ch",
+        "id": "ruggedgrade-4ch-addr1",
+        "name": "RuggedGrade 1200W RGB – 4ch RGBW @ Address 1  (ch1=R, ch2=G, ch3=B, ch4=W)",
+        "profile_id": "ruggedgrade-1200w-rgb-stadium-4ch",
         "start_address": 1,
         "setup": {},
         "red": 1, "green": 2, "blue": 3, "white": 4,
@@ -80,7 +85,7 @@ LAYOUTS = [
     {
         "id": "4ch-addr5",
         "name": "4ch Direct @ Address 5  (ch5=R, ch6=G, ch7=B, ch8=W)",
-        "profile_id": "stadium-pro-iii-rgbw-4ch",
+        "profile_id": "ruggedgrade-1200w-rgb-stadium-4ch",
         "start_address": 5,
         "setup": {},
         "red": 5, "green": 6, "blue": 7, "white": 8,
@@ -283,7 +288,7 @@ def main():
     dmx = DMX(base_url)
 
     # ── Connect ──────────────────────────────────────────────────
-    header("Stadium Pro III – Decoder Diagnostic")
+    header("RuggedGrade 1200W RGB Stadium Light – Channel Diagnostic")
     info(f"Connecting to {base_url} ...")
 
     health = dmx.health()
