@@ -213,19 +213,40 @@
             text-transform: uppercase;
             letter-spacing: 1px;
         }
-        .scene-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 10px; margin-bottom: 15px; }
+        .scene-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; margin-bottom: 15px; }
         .scene-card {
             border: 1px solid #3f3f46;
             border-radius: 8px;
             background: #1a1a24;
-            padding: 10px;
+            padding: 12px;
+            min-width: 0;
+            overflow: hidden;
         }
         .scene-card.active { border-color: #3b82f6; background: rgba(59, 130, 246, 0.12); }
-        .scene-card-title { font-size: 13px; font-weight: 700; color: #e4e4e7; margin-bottom: 8px; }
-        .scene-card-subtitle { font-size: 11px; color: #71717a; margin-bottom: 10px; }
+        .scene-card-title { font-size: 13px; font-weight: 700; color: #e4e4e7; margin-bottom: 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .scene-card-subtitle { font-size: 11px; color: #71717a; margin-bottom: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         .scene-card-meta { font-size: 11px; color: #a1a1aa; margin-bottom: 10px; }
-        .scene-actions { display: flex; gap: 6px; }
-        .scene-actions button { flex: 1; }
+        .scene-actions {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 6px;
+        }
+        .scene-actions button {
+            width: 100%;
+            min-width: 0;
+            padding: 8px 10px;
+            font-size: 10px;
+            letter-spacing: 0.2px;
+            text-align: center;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        @media (max-width: 480px) {
+            .scene-actions {
+                grid-template-columns: 1fr;
+            }
+        }
         .subtitle { color: #71717a; font-size: 14px; margin-top: 5px; }
         .toast {
             position: fixed; bottom: 20px; right: 20px;
