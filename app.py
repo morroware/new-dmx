@@ -1497,10 +1497,44 @@ def api_apply_scene(scene_id):
             state.trigger_timer.cancel()
             state.trigger_timer = None
 
-    if apply_scene(scene_id):
+    data = request.get_json(silent=True) or {}
+    zero_unset = True
+    if isinstance(data, dict) and 'zero_unset' in data:
+        zero_unset = bool(data.get('zero_unset'))
+
+    if apply_scene(scene_id, zero_unset=zero_unset):
         return jsonify({'success': True, 'scene': scene_id})
     else:
         return jsonify({'error': 'Scene not found'}), 404
+
+
+@app.route('/api/scene/<scene_id>/off', methods=['POST'])
+def api_deactivate_scene(scene_id):
+    """Turn off channels contained in a scene."""
+    scene_id = normalize_scene_id(scene_id)
+    if not scene_id:
+        return jsonify({'error': 'Invalid scene id'}), 400
+    if scene_id not in config.SCENES:
+        return jsonify({'error': 'Scene not found'}), 404
+    if not is_safe_to_operate():
+        return jsonify({'error': 'Safety switch is OFF'}), 409
+
+    with state.timer_lock:
+        if state.trigger_timer is not None:
+            state.trigger_timer.cancel()
+            state.trigger_timer = None
+
+    scene = config.SCENES[scene_id]
+    with state.dmx_lock:
+        for channel in scene['channels'].keys():
+            ch_int = int(channel)
+            if 1 <= ch_int <= config.DMX_CHANNELS:
+                state.dmx_data[ch_int] = 0
+
+    if state.current_scene == scene_id:
+        state.current_scene = None
+
+    return jsonify({'success': True, 'scene': scene_id, 'channels_off': len(scene['channels'])})
 
 
 @app.route('/api/scenes', methods=['GET'])

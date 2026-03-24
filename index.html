@@ -223,7 +223,9 @@
         .scene-card.active { border-color: #3b82f6; background: rgba(59, 130, 246, 0.12); }
         .scene-card-title { font-size: 13px; font-weight: 700; color: #e4e4e7; margin-bottom: 8px; }
         .scene-card-subtitle { font-size: 11px; color: #71717a; margin-bottom: 10px; }
+        .scene-card-meta { font-size: 11px; color: #a1a1aa; margin-bottom: 10px; }
         .scene-actions { display: flex; gap: 6px; }
+        .scene-actions button { flex: 1; }
         .subtitle { color: #71717a; font-size: 14px; margin-top: 5px; }
         .toast {
             position: fixed; bottom: 20px; right: 20px;
@@ -262,6 +264,23 @@
         .modal {
             background: #1a1a24; border: 1px solid #3f3f46; border-radius: 12px;
             padding: 30px; max-width: 500px; width: 90%; max-height: 80vh; overflow-y: auto;
+        }
+        .scene-modal { max-width: 860px; }
+        .scene-channel-editor {
+            border: 1px solid #2a2a3a;
+            border-radius: 8px;
+            padding: 12px;
+            background: #0f0f14;
+            max-height: 260px;
+            overflow-y: auto;
+            margin-bottom: 10px;
+        }
+        .scene-channel-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr auto auto;
+            gap: 8px;
+            align-items: center;
+            margin-bottom: 8px;
         }
         .modal h2 { margin-bottom: 20px; }
         .conn-banner {
@@ -582,7 +601,7 @@
 
     <!-- Scene Edit Modal -->
     <div class="modal-overlay" id="scene-modal">
-        <div class="modal">
+        <div class="modal scene-modal">
             <h2>Edit Saved Scene</h2>
             <div class="form-group">
                 <label>Scene Name</label>
@@ -595,6 +614,19 @@
             <div class="form-group" style="display: flex; gap: 8px; align-items: center;">
                 <input type="checkbox" id="scene-modal-use-current">
                 <label for="scene-modal-use-current" style="margin: 0;">Replace scene channels with current DMX state</label>
+            </div>
+            <div class="form-group" style="display: flex; gap: 8px; align-items: center;">
+                <input type="checkbox" id="scene-modal-zero-unset" checked>
+                <label for="scene-modal-zero-unset" style="margin: 0;">When applying this scene, zero all unspecified channels</label>
+            </div>
+            <div class="form-group">
+                <label>Scene Channel Values</label>
+                <div class="scene-channel-editor" id="scene-channel-editor"></div>
+                <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+                    <button class="btn-secondary btn-xs" type="button" onclick="addSceneChannelRow()">+ Add Channel</button>
+                    <button class="btn-secondary btn-xs" type="button" onclick="sortSceneChannelRows()">Sort</button>
+                    <button class="btn-warning btn-xs" type="button" onclick="compactSceneChannels()">Remove 0 Values</button>
+                </div>
             </div>
             <div style="display: flex; gap: 10px; justify-content: flex-end;">
                 <button class="btn-secondary btn-sm" onclick="closeSceneModal()">Cancel</button>
@@ -612,6 +644,8 @@
     let scenes = {};
     let currentScene = null;
     let editingSceneId = null;
+    let editingSceneChannels = {};
+    let sceneApplyZeroUnset = true;
     let activeSlider = null;
     let connectionOk = true;
     let consecutiveErrors = 0;
@@ -1101,20 +1135,24 @@
 
         for (const sid of ids) {
             const scene = scenes[sid];
+            const channelCount = Object.keys(scene.channels || {}).length;
             const card = document.createElement('div');
             card.className = 'scene-card' + (currentScene === sid ? ' active' : '');
             card.dataset.sceneId = sid;
             card.innerHTML = `
                 <div class="scene-card-title">${scene.name || sid}</div>
                 <div class="scene-card-subtitle">ID: ${sid}</div>
+                <div class="scene-card-meta">${channelCount} channels stored</div>
                 <div class="scene-actions">
                     <button class="btn-success btn-sm" type="button">Apply</button>
+                    <button class="btn-warning btn-sm" type="button">Off</button>
                     <button class="btn-secondary btn-sm" type="button">Edit</button>
                     <button class="btn-danger btn-sm" type="button">Delete</button>
                 </div>
             `;
-            const [applyBtn, editBtn, deleteBtn] = card.querySelectorAll('button');
+            const [applyBtn, offBtn, editBtn, deleteBtn] = card.querySelectorAll('button');
             applyBtn.onclick = () => applyScene(sid);
+            offBtn.onclick = () => deactivateScene(sid);
             editBtn.onclick = () => openSceneModal(sid);
             deleteBtn.onclick = () => deleteScene(sid, scene.name);
             list.appendChild(card);
@@ -1143,11 +1181,26 @@
     }
 
     function applyScene(sceneId) {
-        fetch(`/api/scene/${encodeURIComponent(sceneId)}`, {method: 'POST', headers})
+        fetch(`/api/scene/${encodeURIComponent(sceneId)}`, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify({zero_unset: sceneApplyZeroUnset})
+        })
             .then(r => r.json().then(d => ({ok: r.ok, data: d})))
             .then(({ok, data}) => {
                 if (!ok) throw new Error(data.error || 'Failed');
                 showToast(`Scene: ${scenes[sceneId]?.name || sceneId}`);
+                updateStatus();
+            })
+            .catch(err => showToast(err.message, true));
+    }
+
+    function deactivateScene(sceneId) {
+        fetch(`/api/scene/${encodeURIComponent(sceneId)}/off`, {method: 'POST', headers})
+            .then(r => r.json().then(d => ({ok: r.ok, data: d})))
+            .then(({ok, data}) => {
+                if (!ok) throw new Error(data.error || 'Failed');
+                showToast(`Off: ${scenes[sceneId]?.name || sceneId}`);
                 updateStatus();
             })
             .catch(err => showToast(err.message, true));
@@ -1197,6 +1250,11 @@
         document.getElementById('scene-modal-name').value = scene.name || sceneId;
         document.getElementById('scene-modal-id').value = sceneId;
         document.getElementById('scene-modal-use-current').checked = false;
+        document.getElementById('scene-modal-use-current').onchange = toggleSceneEditorDisabled;
+        document.getElementById('scene-modal-zero-unset').checked = sceneApplyZeroUnset;
+        editingSceneChannels = {...(scene.channels || {})};
+        renderSceneChannelRows();
+        toggleSceneEditorDisabled();
         document.getElementById('scene-modal').classList.add('active');
         document.getElementById('scene-modal-name').focus();
     }
@@ -1204,6 +1262,86 @@
     function closeSceneModal() {
         document.getElementById('scene-modal').classList.remove('active');
         editingSceneId = null;
+        editingSceneChannels = {};
+    }
+
+    function renderSceneChannelRows() {
+        const editor = document.getElementById('scene-channel-editor');
+        if (!editor) return;
+        editor.innerHTML = '';
+
+        const entries = Object.entries(editingSceneChannels)
+            .map(([ch, val]) => [parseInt(ch), parseInt(val)])
+            .filter(([ch, val]) => Number.isInteger(ch) && ch >= 1 && ch <= 512 && Number.isInteger(val))
+            .sort((a, b) => a[0] - b[0]);
+
+        if (entries.length === 0) {
+            editor.innerHTML = '<div style="color: #71717a; font-size: 12px;">No channels yet. Add one below.</div>';
+            return;
+        }
+
+        for (const [ch, val] of entries) {
+            const row = document.createElement('div');
+            row.className = 'scene-channel-row';
+            row.innerHTML = `
+                <input type="number" min="1" max="512" value="${ch}" data-role="channel">
+                <input type="number" min="0" max="255" value="${val}" data-role="value">
+                <span style="font-size: 11px; color: #71717a;">${channelLabels[ch] || `Channel ${ch}`}</span>
+                <button class="btn-danger btn-xs" type="button">Remove</button>
+            `;
+            const channelInput = row.querySelector('[data-role="channel"]');
+            const valueInput = row.querySelector('[data-role="value"]');
+            const removeBtn = row.querySelector('button');
+
+            channelInput.onchange = () => updateSceneChannelFromRow(ch, channelInput.value, valueInput.value);
+            valueInput.onchange = () => updateSceneChannelFromRow(ch, channelInput.value, valueInput.value);
+            removeBtn.onclick = () => {
+                delete editingSceneChannels[ch];
+                renderSceneChannelRows();
+            };
+            editor.appendChild(row);
+        }
+    }
+
+    function toggleSceneEditorDisabled() {
+        const useCurrent = document.getElementById('scene-modal-use-current').checked;
+        const editor = document.getElementById('scene-channel-editor');
+        if (editor) editor.style.opacity = useCurrent ? '0.45' : '1';
+    }
+
+    function updateSceneChannelFromRow(originalChannel, nextChannelValue, nextValueValue) {
+        const nextChannel = Math.max(1, Math.min(512, parseInt(nextChannelValue) || 1));
+        const nextValue = Math.max(0, Math.min(255, parseInt(nextValueValue) || 0));
+        delete editingSceneChannels[originalChannel];
+        editingSceneChannels[nextChannel] = nextValue;
+        renderSceneChannelRows();
+    }
+
+    function addSceneChannelRow() {
+        let candidate = 1;
+        while (editingSceneChannels[candidate] !== undefined && candidate <= 512) candidate += 1;
+        if (candidate > 512) {
+            showToast('All channels are already in this scene', true);
+            return;
+        }
+        editingSceneChannels[candidate] = 255;
+        renderSceneChannelRows();
+    }
+
+    function sortSceneChannelRows() {
+        editingSceneChannels = Object.fromEntries(
+            Object.entries(editingSceneChannels)
+                .map(([ch, val]) => [parseInt(ch), parseInt(val)])
+                .sort((a, b) => a[0] - b[0])
+        );
+        renderSceneChannelRows();
+    }
+
+    function compactSceneChannels() {
+        editingSceneChannels = Object.fromEntries(
+            Object.entries(editingSceneChannels).filter(([_, val]) => parseInt(val) > 0)
+        );
+        renderSceneChannelRows();
     }
 
     function saveSceneEdit() {
@@ -1211,9 +1349,11 @@
         const name = document.getElementById('scene-modal-name').value.trim();
         const newSceneId = normalizeSceneId(document.getElementById('scene-modal-id').value);
         const useCurrent = document.getElementById('scene-modal-use-current').checked;
+        sceneApplyZeroUnset = document.getElementById('scene-modal-zero-unset').checked;
         if (!newSceneId) { showToast('Invalid scene id', true); return; }
 
         const payload = {id: newSceneId, name: name || newSceneId};
+        if (!useCurrent) payload.channels = editingSceneChannels;
 
         const saveUpdate = (channels) => {
             if (channels) payload.channels = channels;
