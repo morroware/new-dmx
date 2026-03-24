@@ -989,7 +989,9 @@
         }
 
         if (updated === 0) {
-            showToast('No dimmer channels found in fixture labels', true);
+            // Some fixture modes do not expose a dedicated dimmer channel.
+            // In that case, treat the command as an all-channel level set.
+            setAllChannels(value);
             return;
         }
 
