@@ -975,13 +975,24 @@
 
     function setAllFixtureDimmers(value) {
         if (!fixtureInfo) { setAllChannels(value); return; }
+
+        let updated = 0;
         for (const fixture of fixtureInfo.fixtures) {
             for (const [ch, label] of Object.entries(fixture.channels)) {
-                if (label.toLowerCase() === 'dimmer') {
+                const normalized = String(label || '').toLowerCase();
+                // Support common dimmer naming variations (e.g. "Dimmer", "Master Dimmer")
+                if (normalized.includes('dimmer')) {
                     onFixturePanelSlider(parseInt(ch), value);
+                    updated += 1;
                 }
             }
         }
+
+        if (updated === 0) {
+            showToast('No dimmer channels found in fixture labels', true);
+            return;
+        }
+
         showToast(value === 0 ? 'All dimmers off' : `All dimmers set to ${value}`);
     }
 
