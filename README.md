@@ -119,7 +119,7 @@ pip install -r requirements.txt
 
 - **Save Current State as Scene** — enter a name and save all current slider values
 - Click any scene button to apply it
-- Right-click a scene button to delete it
+- Use each scene card's **Apply / Edit / Delete** buttons to manage scenes
 - **Trigger Configuration** — select which scene fires on trigger, which scene to return to, and the duration
 
 ### Settings Tab
@@ -217,6 +217,7 @@ All configuration is persisted to `/var/lib/dmx/config.json` and survives reboot
 | POST | `/api/scene/<id>` | Apply a scene |
 | GET | `/api/scenes` | List all scenes |
 | POST | `/api/scenes` | Create/update a scene `{id, name, channels}` |
+| PUT | `/api/scenes/<id>` | Edit a scene `{id?, name?, channels?}` |
 | DELETE | `/api/scenes/<id>` | Delete a scene |
 | POST | `/api/channel` | Set one channel `{channel, value}` |
 | POST | `/api/channels` | Set multiple channels `{channels: {1: 255, 2: 128}}` |
