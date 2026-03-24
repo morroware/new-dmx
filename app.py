@@ -300,6 +300,29 @@ def validate_ip_address(ip_str):
     except ValueError:
         return False
 
+
+def normalize_scene_id(scene_id):
+    """Normalize and validate a scene id."""
+    if not isinstance(scene_id, str):
+        return None
+    normalized = scene_id.strip().replace(' ', '_')[:64]
+    return normalized or None
+
+
+def parse_scene_channels(raw_channels):
+    """Validate and normalize incoming scene channel payload."""
+    if raw_channels is None:
+        raw_channels = {}
+    if not isinstance(raw_channels, dict):
+        raise ValueError("channels must be an object of channel/value pairs")
+
+    channels = {}
+    for ch, val in raw_channels.items():
+        ch_int = int(ch)
+        if 1 <= ch_int <= config.DMX_CHANNELS:
+            channels[ch_int] = max(0, min(255, int(val)))
+    return channels
+
 # ============================================
 # Art-Net Functions
 # ============================================
@@ -1464,6 +1487,9 @@ def api_trigger():
 
 @app.route('/api/scene/<scene_id>', methods=['POST'])
 def api_apply_scene(scene_id):
+    scene_id = normalize_scene_id(scene_id)
+    if not scene_id:
+        return jsonify({'error': 'Invalid scene id'}), 400
     if not is_safe_to_operate():
         return jsonify({'error': 'Safety switch is OFF'}), 409
     with state.timer_lock:
@@ -1495,24 +1521,15 @@ def api_create_scene():
     if not isinstance(data, dict):
         return jsonify({'error': 'Invalid JSON body'}), 400
 
-    scene_id = data.get('id')
+    scene_id = normalize_scene_id(data.get('id'))
     name = data.get('name', '')
     raw_channels = data.get('channels', {})
 
-    if not scene_id or not isinstance(scene_id, str):
+    if not scene_id:
         return jsonify({'error': 'Scene id is required'}), 400
 
-    # Sanitize scene id
-    scene_id = scene_id.strip().replace(' ', '_')[:64]
-    if not scene_id:
-        return jsonify({'error': 'Invalid scene id'}), 400
-
-    channels = {}
     try:
-        for ch, val in raw_channels.items():
-            ch_int = int(ch)
-            if 1 <= ch_int <= config.DMX_CHANNELS:
-                channels[ch_int] = max(0, min(255, int(val)))
+        channels = parse_scene_channels(raw_channels)
     except (TypeError, ValueError) as e:
         return jsonify({'error': f'Invalid channel data: {e}'}), 400
 
@@ -1528,9 +1545,64 @@ def api_create_scene():
     return jsonify({'success': True, 'id': scene_id})
 
 
+@app.route('/api/scenes/<scene_id>', methods=['PUT'])
+def api_update_scene(scene_id):
+    """Edit an existing scene (rename id/name and optionally replace channels)."""
+    scene_id = normalize_scene_id(scene_id)
+    if not scene_id or scene_id not in config.SCENES:
+        return jsonify({'error': 'Scene not found'}), 404
+
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({'error': 'Invalid JSON body'}), 400
+
+    target_scene_id = normalize_scene_id(data.get('id', scene_id))
+    if not target_scene_id:
+        return jsonify({'error': 'Invalid scene id'}), 400
+
+    if target_scene_id != scene_id and target_scene_id in config.SCENES:
+        return jsonify({'error': 'Scene id already exists'}), 409
+
+    existing_scene = config.SCENES[scene_id]
+    name = data.get('name', existing_scene['name'])
+
+    try:
+        if 'channels' in data:
+            channels = parse_scene_channels(data.get('channels'))
+        else:
+            channels = dict(existing_scene['channels'])
+    except (TypeError, ValueError) as e:
+        return jsonify({'error': f'Invalid channel data: {e}'}), 400
+
+    updated_scene = {
+        'name': str(name).strip() or target_scene_id,
+        'channels': channels
+    }
+
+    if target_scene_id == scene_id:
+        config.SCENES[scene_id] = updated_scene
+    else:
+        del config.SCENES[scene_id]
+        config.SCENES[target_scene_id] = updated_scene
+        if config.TRIGGER_SCENE == scene_id:
+            config.TRIGGER_SCENE = target_scene_id
+        if config.IDLE_SCENE == scene_id:
+            config.IDLE_SCENE = target_scene_id
+        if state.current_scene == scene_id:
+            state.current_scene = target_scene_id
+
+    save_config()
+
+    if state.current_scene == target_scene_id:
+        apply_scene(target_scene_id)
+
+    return jsonify({'success': True, 'id': target_scene_id})
+
+
 @app.route('/api/scenes/<scene_id>', methods=['DELETE'])
 def api_delete_scene(scene_id):
     """Delete a scene"""
+    scene_id = normalize_scene_id(scene_id)
     if scene_id not in config.SCENES:
         return jsonify({'error': 'Scene not found'}), 404
 
@@ -1609,7 +1681,7 @@ def api_blackout():
 
 @app.route('/api/channels/all', methods=['POST'])
 def api_set_all_channels():
-    """Set all visible channels to a single value"""
+    """Set all DMX channels to a single value."""
     data = request.get_json()
     if not isinstance(data, dict) or 'value' not in data:
         return jsonify({'error': 'Missing value'}), 400
@@ -1620,11 +1692,11 @@ def api_set_all_channels():
         return jsonify({'error': 'Invalid value'}), 400
 
     with state.dmx_lock:
-        for i in range(1, config.VISIBLE_CHANNELS + 1):
+        for i in range(1, config.DMX_CHANNELS + 1):
             state.dmx_data[i] = value
     state.current_scene = None
-    logger.info("Set all %d channels to %d", config.VISIBLE_CHANNELS, value)
-    return jsonify({'success': True, 'value': value})
+    logger.info("Set all %d DMX channels to %d", config.DMX_CHANNELS, value)
+    return jsonify({'success': True, 'value': value, 'channels_updated': config.DMX_CHANNELS})
 
 
 @app.route('/api/config', methods=['GET', 'POST'])

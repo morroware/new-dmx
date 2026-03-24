@@ -213,14 +213,17 @@
             text-transform: uppercase;
             letter-spacing: 1px;
         }
-        .scene-list { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 15px; }
-        .scene-btn {
-            padding: 10px 16px; font-size: 12px; font-weight: 600; border: 1px solid #3f3f46;
-            border-radius: 8px; cursor: pointer; background: #1a1a24; color: #e4e4e7;
-            transition: all 0.2s; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+        .scene-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 10px; margin-bottom: 15px; }
+        .scene-card {
+            border: 1px solid #3f3f46;
+            border-radius: 8px;
+            background: #1a1a24;
+            padding: 10px;
         }
-        .scene-btn:hover { border-color: #3b82f6; background: #1e1e2a; transform: translateY(-1px); }
-        .scene-btn.active { border-color: #3b82f6; background: rgba(59, 130, 246, 0.15); color: #60a5fa; }
+        .scene-card.active { border-color: #3b82f6; background: rgba(59, 130, 246, 0.12); }
+        .scene-card-title { font-size: 13px; font-weight: 700; color: #e4e4e7; margin-bottom: 8px; }
+        .scene-card-subtitle { font-size: 11px; color: #71717a; margin-bottom: 10px; }
+        .scene-actions { display: flex; gap: 6px; }
         .subtitle { color: #71717a; font-size: 14px; margin-top: 5px; }
         .toast {
             position: fixed; bottom: 20px; right: 20px;
@@ -577,6 +580,29 @@
         </div>
     </div>
 
+    <!-- Scene Edit Modal -->
+    <div class="modal-overlay" id="scene-modal">
+        <div class="modal">
+            <h2>Edit Saved Scene</h2>
+            <div class="form-group">
+                <label>Scene Name</label>
+                <input type="text" id="scene-modal-name" placeholder="Scene name">
+            </div>
+            <div class="form-group">
+                <label>Scene ID (slug)</label>
+                <input type="text" id="scene-modal-id" placeholder="scene_id">
+            </div>
+            <div class="form-group" style="display: flex; gap: 8px; align-items: center;">
+                <input type="checkbox" id="scene-modal-use-current">
+                <label for="scene-modal-use-current" style="margin: 0;">Replace scene channels with current DMX state</label>
+            </div>
+            <div style="display: flex; gap: 10px; justify-content: flex-end;">
+                <button class="btn-secondary btn-sm" onclick="closeSceneModal()">Cancel</button>
+                <button class="btn-primary btn-sm" onclick="saveSceneEdit()">Save Changes</button>
+            </div>
+        </div>
+    </div>
+
     <script>
     // ============================================
     // State
@@ -585,6 +611,7 @@
     let channelLabels = {};
     let scenes = {};
     let currentScene = null;
+    let editingSceneId = null;
     let activeSlider = null;
     let connectionOk = true;
     let consecutiveErrors = 0;
@@ -989,9 +1016,17 @@
             body: JSON.stringify({value})
         })
         .then(r => r.json().then(d => ({ok: r.ok, data: d})))
-        .then(({ok}) => {
+        .then(({ok, data}) => {
             if (ok) {
-                showToast(value === 0 ? 'BLACKOUT' : `All channels set to ${value}`);
+                currentScene = null;
+                document.querySelectorAll('.channel-slider').forEach(slider => {
+                    slider.value = value;
+                });
+                document.querySelectorAll('.channel-value').forEach(valEl => {
+                    valEl.textContent = value;
+                });
+                const count = data?.channels_updated || 512;
+                showToast(value === 0 ? 'BLACKOUT' : `All ${count} channels set to ${value}`);
                 updateStatus();
             } else throw new Error('Failed');
         })
@@ -1030,10 +1065,12 @@
         }).then(r => { if (r.ok) showToast('Label saved'); })
           .catch(console.error);
     }
-    // Enter key in label modal
+    // Enter key in modals
     document.addEventListener('keydown', e => {
         if (e.key === 'Enter' && labelModalCh !== null) saveLabelModal();
         if (e.key === 'Escape' && labelModalCh !== null) closeLabelModal();
+        if (e.key === 'Enter' && editingSceneId !== null) saveSceneEdit();
+        if (e.key === 'Escape' && editingSceneId !== null) closeSceneModal();
     });
 
     // ============================================
@@ -1051,14 +1088,23 @@
 
         for (const sid of ids) {
             const scene = scenes[sid];
-            const btn = document.createElement('button');
-            btn.className = 'scene-btn' + (currentScene === sid ? ' active' : '');
-            btn.textContent = scene.name || sid;
-            btn.title = `Click to apply. Right-click to delete.`;
-            btn.dataset.sceneId = sid;
-            btn.onclick = () => applyScene(sid);
-            btn.oncontextmenu = (e) => { e.preventDefault(); deleteScene(sid, scene.name); };
-            list.appendChild(btn);
+            const card = document.createElement('div');
+            card.className = 'scene-card' + (currentScene === sid ? ' active' : '');
+            card.dataset.sceneId = sid;
+            card.innerHTML = `
+                <div class="scene-card-title">${scene.name || sid}</div>
+                <div class="scene-card-subtitle">ID: ${sid}</div>
+                <div class="scene-actions">
+                    <button class="btn-success btn-sm" type="button">Apply</button>
+                    <button class="btn-secondary btn-sm" type="button">Edit</button>
+                    <button class="btn-danger btn-sm" type="button">Delete</button>
+                </div>
+            `;
+            const [applyBtn, editBtn, deleteBtn] = card.querySelectorAll('button');
+            applyBtn.onclick = () => applyScene(sid);
+            editBtn.onclick = () => openSceneModal(sid);
+            deleteBtn.onclick = () => deleteScene(sid, scene.name);
+            list.appendChild(card);
         }
 
         // Update trigger/idle scene selects
@@ -1099,7 +1145,7 @@
         const name = nameInput.value.trim();
         if (!name) { showToast('Enter a scene name', true); return; }
 
-        const id = name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
+        const id = normalizeSceneId(name);
         if (!id) { showToast('Invalid scene name', true); return; }
 
         // Flush any pending slider updates, then fetch all 512 channels
@@ -1122,6 +1168,67 @@
                 loadScenes();
             })
             .catch(err => showToast(err.message, true));
+    }
+
+    function normalizeSceneId(value) {
+        return (value || '').trim().toLowerCase()
+            .replace(/[^a-z0-9]+/g, '_')
+            .replace(/^_|_$/g, '')
+            .slice(0, 64);
+    }
+
+    function openSceneModal(sceneId) {
+        const scene = scenes[sceneId];
+        if (!scene) return;
+        editingSceneId = sceneId;
+        document.getElementById('scene-modal-name').value = scene.name || sceneId;
+        document.getElementById('scene-modal-id').value = sceneId;
+        document.getElementById('scene-modal-use-current').checked = false;
+        document.getElementById('scene-modal').classList.add('active');
+        document.getElementById('scene-modal-name').focus();
+    }
+
+    function closeSceneModal() {
+        document.getElementById('scene-modal').classList.remove('active');
+        editingSceneId = null;
+    }
+
+    function saveSceneEdit() {
+        if (!editingSceneId) return;
+        const name = document.getElementById('scene-modal-name').value.trim();
+        const newSceneId = normalizeSceneId(document.getElementById('scene-modal-id').value);
+        const useCurrent = document.getElementById('scene-modal-use-current').checked;
+        if (!newSceneId) { showToast('Invalid scene id', true); return; }
+
+        const payload = {id: newSceneId, name: name || newSceneId};
+
+        const saveUpdate = (channels) => {
+            if (channels) payload.channels = channels;
+            fetch(`/api/scenes/${encodeURIComponent(editingSceneId)}`, {
+                method: 'PUT',
+                headers,
+                body: JSON.stringify(payload)
+            })
+                .then(r => r.json().then(d => ({ok: r.ok, data: d})))
+                .then(({ok, data}) => {
+                    if (!ok) throw new Error(data.error || 'Update failed');
+                    showToast(`Updated "${payload.name}"`);
+                    closeSceneModal();
+                    loadScenes();
+                })
+                .catch(err => showToast(err.message, true));
+        };
+
+        if (useCurrent) {
+            flushPendingUpdates();
+            fetch('/api/channels/all-values', {headers})
+                .then(r => r.json())
+                .then(channels => saveUpdate(channels))
+                .catch(err => showToast(err.message, true));
+            return;
+        }
+
+        saveUpdate(null);
     }
 
     function deleteScene(sceneId, sceneName) {
@@ -1343,12 +1450,12 @@
                     if (recvLast) recvLast.textContent = data.artnet_receiver_last_seen !== null ? data.artnet_receiver_last_seen + 's' : '--';
                 }
 
-                // Highlight active scene button using data attribute
-                document.querySelectorAll('.scene-btn').forEach(btn => {
-                    if (btn.dataset.sceneId === currentScene) {
-                        btn.classList.add('active');
+                // Highlight active scene card using data attribute
+                document.querySelectorAll('.scene-card').forEach(card => {
+                    if (card.dataset.sceneId === currentScene) {
+                        card.classList.add('active');
                     } else {
-                        btn.classList.remove('active');
+                        card.classList.remove('active');
                     }
                 });
             })
