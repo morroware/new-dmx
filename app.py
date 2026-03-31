@@ -19,6 +19,7 @@ import socket
 import struct
 import tempfile
 from threading import Lock, Timer, Thread
+import rdm as rdm_module
 
 # ============================================
 # Logging Setup
@@ -285,6 +286,12 @@ class SystemState:
         self.artnet_receiver_running = False
         self.artnet_receiver_packets = 0
         self.artnet_receiver_last_seen = 0  # monotonic timestamp of last packet
+        # RDM (Remote Device Management)
+        self.rdm_supported = False          # True if ENTTEC Pro supports RDM
+        self.rdm_devices = {}               # {uid_string: RDMDevice}
+        self.rdm_discovery_running = False
+        self.rdm_lock = Lock()              # Protects rdm_devices dict
+        self.rdm_last_discovery = 0         # monotonic timestamp
 
 state = SystemState()
 
@@ -512,6 +519,9 @@ ENTTEC_PRO_END = 0xE7
 ENTTEC_PRO_SEND_DMX = 6        # Label: Send DMX Packet
 ENTTEC_PRO_GET_PARAMS = 3      # Label: Get Widget Parameters
 ENTTEC_PRO_GET_SERIAL = 10     # Label: Get Widget Serial Number
+ENTTEC_PRO_SEND_RDM = 7        # Label: Send RDM Packet Request
+ENTTEC_PRO_RECEIVE_DMX = 5     # Label: Receive DMX Packet (RDM response comes here too)
+ENTTEC_PRO_SEND_RDM_DISCOVERY = 11  # Label: Send RDM Discovery Request
 # FTDI VID:PID used by both Open DMX USB and DMX USB Pro
 ENTTEC_FTDI_VID = 0x0403
 ENTTEC_FTDI_PID = 0x6001
@@ -1027,6 +1037,432 @@ def _health_check_enttec_pro():
         return False
 
 
+# ============================================
+# RDM Communication via ENTTEC DMX USB Pro
+# ============================================
+
+def _rdm_read_pro_response(timeout=0.5):
+    """Read an ENTTEC Pro protocol response, waiting up to timeout seconds.
+
+    Returns (label, data) tuple or (None, None) on timeout/error.
+    Caller must hold ftdi_lock.
+    """
+    if state.serial_device is None:
+        return None, None
+
+    deadline = time.monotonic() + timeout
+    buf = bytearray()
+
+    while time.monotonic() < deadline:
+        waiting = state.serial_device.in_waiting
+        if waiting > 0:
+            buf.extend(state.serial_device.read(waiting))
+        else:
+            time.sleep(0.01)
+            continue
+
+        # Try to parse an ENTTEC Pro packet from buffer
+        while len(buf) >= 5:
+            # Find start byte
+            try:
+                start_idx = buf.index(ENTTEC_PRO_START)
+            except ValueError:
+                buf.clear()
+                break
+
+            if start_idx > 0:
+                del buf[:start_idx]
+
+            if len(buf) < 5:
+                break
+
+            label = buf[1]
+            data_len = buf[2] | (buf[3] << 8)
+            total_len = 4 + data_len + 1  # header + data + end byte
+
+            if len(buf) < total_len:
+                break  # Need more data
+
+            if buf[total_len - 1] == ENTTEC_PRO_END:
+                data = bytes(buf[4:4 + data_len])
+                del buf[:total_len]
+                return label, data
+            else:
+                # Invalid packet, skip start byte and retry
+                del buf[0:1]
+
+    return None, None
+
+
+def _send_rdm_command(rdm_packet, timeout=0.5):
+    """Send an RDM command via ENTTEC Pro Label 7 and read the response.
+
+    Args:
+        rdm_packet: Complete RDM packet bytes (from rdm_module.build_rdm_packet).
+        timeout: Seconds to wait for response.
+
+    Returns:
+        rdm_module.RDMResponse object, or None on communication failure.
+    Caller must hold ftdi_lock.
+    """
+    if state.dmx_driver != "enttec_pro" or state.serial_device is None:
+        return None
+
+    try:
+        state.serial_device.reset_input_buffer()
+
+        # Label 7: Send RDM Packet Request
+        # Data payload = the RDM packet (sub-start code through checksum)
+        enttec_packet = _enttec_pro_packet(ENTTEC_PRO_SEND_RDM, rdm_packet)
+        state.serial_device.write(enttec_packet)
+        state.serial_device.flush()
+
+        # Read the ENTTEC Pro response
+        label, data = _rdm_read_pro_response(timeout=timeout)
+
+        if label is None or data is None:
+            return None
+
+        # Label 7 response contains the RDM response packet
+        if label == ENTTEC_PRO_SEND_RDM and len(data) > 0:
+            return rdm_module.parse_rdm_response(data)
+
+        return None
+
+    except Exception as e:
+        logger.debug("RDM command failed: %s", e)
+        return None
+
+
+def _send_rdm_discovery(rdm_packet, timeout=0.5):
+    """Send an RDM discovery packet via ENTTEC Pro Label 11.
+
+    Label 11 is specifically for DISC_UNIQUE_BRANCH — it handles
+    the bus turnaround timing and collision detection internally.
+
+    Returns raw response bytes or None.
+    Caller must hold ftdi_lock.
+    """
+    if state.dmx_driver != "enttec_pro" or state.serial_device is None:
+        return None
+
+    try:
+        state.serial_device.reset_input_buffer()
+
+        enttec_packet = _enttec_pro_packet(ENTTEC_PRO_SEND_RDM_DISCOVERY, rdm_packet)
+        state.serial_device.write(enttec_packet)
+        state.serial_device.flush()
+
+        label, data = _rdm_read_pro_response(timeout=timeout)
+
+        if label is None or data is None:
+            return None
+
+        # Label 11 response: raw discovery response bytes (preamble + encoded UID)
+        if label == ENTTEC_PRO_SEND_RDM_DISCOVERY and len(data) > 0:
+            return data
+
+        return None
+
+    except Exception as e:
+        logger.debug("RDM discovery send failed: %s", e)
+        return None
+
+
+def rdm_discover_devices():
+    """Run full RDM discovery to find all devices on the bus.
+
+    Uses binary search tree algorithm:
+    1. Send DISC_UN_MUTE broadcast to unmute all
+    2. Send DISC_UNIQUE_BRANCH for full UID range
+    3. If collision, split range and recurse
+    4. If single response, DISC_MUTE that device and continue
+
+    Returns list of discovered RDMDevice objects.
+    """
+    if state.dmx_driver != "enttec_pro" or state.serial_device is None:
+        logger.warning("RDM discovery requires ENTTEC DMX USB Pro")
+        return []
+
+    state.rdm_discovery_running = True
+    discovered = []
+    MAX_DEVICES = 512  # Safety limit
+
+    try:
+        with state.ftdi_lock:
+            # Step 1: Unmute all devices
+            logger.info("RDM Discovery: Sending DISC_UN_MUTE broadcast...")
+            unmute_pkt = rdm_module.build_unmute_packet()
+            _send_rdm_command(unmute_pkt, timeout=0.3)
+            time.sleep(0.05)
+            # Send unmute twice per spec
+            _send_rdm_command(unmute_pkt, timeout=0.3)
+            time.sleep(0.05)
+
+        # Step 2: Binary search discovery
+        lower = b'\x00\x00\x00\x00\x00\x00'
+        upper = b'\xFF\xFF\xFF\xFF\xFF\xFF'
+
+        _rdm_discover_branch(lower, upper, discovered, depth=0, max_devices=MAX_DEVICES)
+
+        logger.info("RDM Discovery complete: found %d device(s)", len(discovered))
+
+        # Step 3: Fetch device info for each discovered device
+        for device in discovered:
+            _rdm_fetch_device_info(device)
+            device.last_seen = time.monotonic()
+
+        # Update global state
+        with state.rdm_lock:
+            state.rdm_devices = {d.uid_string: d for d in discovered}
+            state.rdm_last_discovery = time.monotonic()
+
+    except Exception as e:
+        logger.error("RDM discovery error: %s", e)
+    finally:
+        state.rdm_discovery_running = False
+
+    return discovered
+
+
+def _rdm_discover_branch(lower, upper, discovered, depth=0, max_devices=512):
+    """Recursive binary search for RDM devices in UID range [lower, upper].
+
+    Args:
+        lower: 6-byte lower bound UID
+        upper: 6-byte upper bound UID
+        discovered: List to append found RDMDevice objects to
+        depth: Current recursion depth (safety limit)
+        max_devices: Maximum devices to discover
+    """
+    if depth > 48 or len(discovered) >= max_devices:
+        return
+
+    if lower > upper:
+        return
+
+    with state.ftdi_lock:
+        # Send DISC_UNIQUE_BRANCH for this range
+        disc_pkt = rdm_module.build_discovery_packet(lower, upper)
+        raw_response = _send_rdm_discovery(disc_pkt, timeout=0.3)
+
+    if raw_response is None or len(raw_response) == 0:
+        # No devices in this range
+        return
+
+    # Try to parse a single device UID from the response
+    uid = rdm_module.parse_discovery_response(raw_response)
+
+    if uid is not None:
+        # Got a clean response — single device or dominant collision winner
+        # Try to mute this device
+        with state.ftdi_lock:
+            mute_pkt = rdm_module.build_mute_packet(uid)
+            mute_resp = _send_rdm_command(mute_pkt, timeout=0.3)
+
+        if mute_resp is not None and mute_resp.valid:
+            device = rdm_module.RDMDevice(uid)
+            device.muted = True
+            discovered.append(device)
+            logger.info("  RDM discovered device: %s", device.uid_string)
+
+            # Continue searching same range for more devices
+            _rdm_discover_branch(lower, upper, discovered, depth + 1, max_devices)
+        else:
+            # Mute failed — could be collision, try splitting
+            _rdm_split_and_search(lower, upper, discovered, depth, max_devices)
+    else:
+        # Collision — response was garbled, split the search range
+        _rdm_split_and_search(lower, upper, discovered, depth, max_devices)
+
+
+def _rdm_split_and_search(lower, upper, discovered, depth, max_devices):
+    """Split a UID range in half and search both halves."""
+    lower_int = int.from_bytes(lower, 'big')
+    upper_int = int.from_bytes(upper, 'big')
+
+    if lower_int >= upper_int:
+        return
+
+    mid_int = lower_int + (upper_int - lower_int) // 2
+    mid = mid_int.to_bytes(6, 'big')
+    mid_plus_one = (mid_int + 1).to_bytes(6, 'big')
+
+    _rdm_discover_branch(lower, mid, discovered, depth + 1, max_devices)
+    _rdm_discover_branch(mid_plus_one, upper, discovered, depth + 1, max_devices)
+
+
+def _rdm_fetch_device_info(device):
+    """Fetch standard information about a discovered RDM device."""
+    uid = device.uid
+
+    with state.ftdi_lock:
+        # GET DEVICE_INFO
+        pkt = rdm_module.build_rdm_packet(uid, rdm_module.CC_GET_COMMAND,
+                                           rdm_module.PID_DEVICE_INFO)
+        resp = _send_rdm_command(pkt, timeout=0.5)
+        if resp and resp.valid and resp.is_ack:
+            info = rdm_module.parse_device_info(resp.data)
+            if info:
+                device.device_info = info
+                device.dmx_start_address = info.dmx_start_address
+                device.current_personality = info.current_personality
+                device.personality_count = info.personality_count
+                device.sensor_count = info.sensor_count
+
+    time.sleep(0.02)
+
+    with state.ftdi_lock:
+        # GET DEVICE_LABEL
+        pkt = rdm_module.build_rdm_packet(uid, rdm_module.CC_GET_COMMAND,
+                                           rdm_module.PID_DEVICE_LABEL)
+        resp = _send_rdm_command(pkt, timeout=0.5)
+        if resp and resp.valid and resp.is_ack:
+            device.device_label = resp.data.decode('ascii', errors='replace').rstrip('\x00')
+
+    time.sleep(0.02)
+
+    with state.ftdi_lock:
+        # GET MANUFACTURER_LABEL
+        pkt = rdm_module.build_rdm_packet(uid, rdm_module.CC_GET_COMMAND,
+                                           rdm_module.PID_MANUFACTURER_LABEL)
+        resp = _send_rdm_command(pkt, timeout=0.5)
+        if resp and resp.valid and resp.is_ack:
+            device.manufacturer_label = resp.data.decode('ascii', errors='replace').rstrip('\x00')
+
+    time.sleep(0.02)
+
+    with state.ftdi_lock:
+        # GET DEVICE_MODEL_DESCRIPTION
+        pkt = rdm_module.build_rdm_packet(uid, rdm_module.CC_GET_COMMAND,
+                                           rdm_module.PID_DEVICE_MODEL_DESCRIPTION)
+        resp = _send_rdm_command(pkt, timeout=0.5)
+        if resp and resp.valid and resp.is_ack:
+            device.model_description = resp.data.decode('ascii', errors='replace').rstrip('\x00')
+
+    time.sleep(0.02)
+
+    with state.ftdi_lock:
+        # GET SOFTWARE_VERSION_LABEL
+        pkt = rdm_module.build_rdm_packet(uid, rdm_module.CC_GET_COMMAND,
+                                           rdm_module.PID_SOFTWARE_VERSION_LABEL)
+        resp = _send_rdm_command(pkt, timeout=0.5)
+        if resp and resp.valid and resp.is_ack:
+            device.software_version_label = resp.data.decode('ascii', errors='replace').rstrip('\x00')
+
+    # Fetch personality descriptions if available
+    if device.personality_count > 0:
+        for p in range(1, device.personality_count + 1):
+            time.sleep(0.02)
+            with state.ftdi_lock:
+                pkt = rdm_module.build_rdm_packet(
+                    uid, rdm_module.CC_GET_COMMAND,
+                    rdm_module.PID_DMX_PERSONALITY_DESCRIPTION,
+                    data=rdm_module.build_get_personality_description(p))
+                resp = _send_rdm_command(pkt, timeout=0.5)
+                if resp and resp.valid and resp.is_ack:
+                    desc = rdm_module.parse_dmx_personality_description(resp.data)
+                    if desc:
+                        device.personalities[p] = (desc['footprint'], desc['description'])
+
+    logger.info("  RDM device %s: %s %s (addr=%d, personality=%d/%d)",
+                device.uid_string,
+                device.manufacturer_label or "?",
+                device.model_description or "?",
+                device.dmx_start_address,
+                device.current_personality,
+                device.personality_count)
+
+
+def rdm_get_parameter(uid_str, pid):
+    """GET a parameter from an RDM device by UID string and PID.
+
+    Returns RDMResponse or None.
+    """
+    try:
+        uid = rdm_module.uid_from_string(uid_str)
+    except ValueError:
+        return None
+
+    with state.ftdi_lock:
+        pkt = rdm_module.build_rdm_packet(uid, rdm_module.CC_GET_COMMAND, pid)
+        return _send_rdm_command(pkt, timeout=0.5)
+
+
+def rdm_set_parameter(uid_str, pid, data=b''):
+    """SET a parameter on an RDM device by UID string and PID.
+
+    Returns RDMResponse or None.
+    """
+    try:
+        uid = rdm_module.uid_from_string(uid_str)
+    except ValueError:
+        return None
+
+    with state.ftdi_lock:
+        pkt = rdm_module.build_rdm_packet(uid, rdm_module.CC_SET_COMMAND, pid, data=data)
+        return _send_rdm_command(pkt, timeout=0.5)
+
+
+def rdm_set_dmx_address(uid_str, address):
+    """Set the DMX start address of an RDM device."""
+    if not 1 <= address <= 512:
+        return None
+    data = rdm_module.build_set_dmx_address(address)
+    resp = rdm_set_parameter(uid_str, rdm_module.PID_DMX_START_ADDRESS, data)
+    if resp and resp.valid and resp.is_ack:
+        with state.rdm_lock:
+            if uid_str in state.rdm_devices:
+                state.rdm_devices[uid_str].dmx_start_address = address
+    return resp
+
+
+def rdm_set_personality(uid_str, personality):
+    """Set the DMX personality of an RDM device."""
+    data = rdm_module.build_set_personality(personality)
+    resp = rdm_set_parameter(uid_str, rdm_module.PID_DMX_PERSONALITY, data)
+    if resp and resp.valid and resp.is_ack:
+        with state.rdm_lock:
+            if uid_str in state.rdm_devices:
+                state.rdm_devices[uid_str].current_personality = personality
+    return resp
+
+
+def rdm_identify_device(uid_str, on=True):
+    """Turn identify mode on/off for an RDM device (makes it blink)."""
+    data = rdm_module.build_set_identify(on)
+    return rdm_set_parameter(uid_str, rdm_module.PID_IDENTIFY_DEVICE, data)
+
+
+def rdm_set_device_label(uid_str, label):
+    """Set a custom label on an RDM device."""
+    data = rdm_module.build_set_device_label(label)
+    resp = rdm_set_parameter(uid_str, rdm_module.PID_DEVICE_LABEL, data)
+    if resp and resp.valid and resp.is_ack:
+        with state.rdm_lock:
+            if uid_str in state.rdm_devices:
+                state.rdm_devices[uid_str].device_label = label[:32]
+    return resp
+
+
+def rdm_get_sensor_value(uid_str, sensor_num):
+    """Read a sensor value from an RDM device."""
+    try:
+        uid = rdm_module.uid_from_string(uid_str)
+    except ValueError:
+        return None
+
+    with state.ftdi_lock:
+        pkt = rdm_module.build_rdm_packet(
+            uid, rdm_module.CC_GET_COMMAND,
+            rdm_module.PID_SENSOR_VALUE,
+            data=rdm_module.build_get_sensor_value(sensor_num))
+        resp = _send_rdm_command(pkt, timeout=0.5)
+        if resp and resp.valid and resp.is_ack:
+            return rdm_module.parse_sensor_value(resp.data)
+    return None
+
+
 def dmx_refresh_thread():
     """Background thread to continuously send DMX frames via ENTTEC and/or Art-Net."""
     refresh_interval = 1.0 / config.DMX_REFRESH_RATE
@@ -1473,6 +1909,9 @@ def api_status():
         'artnet_receiver_active': state.artnet_receiver_running and state.artnet_receiver_thread is not None and state.artnet_receiver_thread.is_alive(),
         'artnet_receiver_packets': state.artnet_receiver_packets,
         'artnet_receiver_last_seen': round(time.monotonic() - state.artnet_receiver_last_seen, 1) if state.artnet_receiver_last_seen > 0 else None,
+        'rdm_supported': state.dmx_driver == "enttec_pro",
+        'rdm_device_count': len(state.rdm_devices),
+        'rdm_discovery_running': state.rdm_discovery_running,
         'channels': get_current_channels(),
         'channel_labels': {str(k): v for k, v in config.CHANNEL_LABELS.items()},
     })
@@ -2251,6 +2690,145 @@ def api_reconnect():
 
 
 # ============================================
+# RDM API Endpoints
+# ============================================
+
+@app.route('/api/rdm/discover', methods=['POST'])
+def api_rdm_discover():
+    """Run RDM discovery to find all devices on the bus."""
+    if state.dmx_driver != "enttec_pro":
+        return jsonify({'error': 'RDM requires ENTTEC DMX USB Pro'}), 400
+    if state.rdm_discovery_running:
+        return jsonify({'error': 'Discovery already in progress'}), 409
+
+    # Run discovery in a background thread so we don't block the HTTP request
+    def _discover():
+        rdm_discover_devices()
+
+    Thread(target=_discover, daemon=True).start()
+    return jsonify({'success': True, 'message': 'Discovery started'})
+
+
+@app.route('/api/rdm/devices', methods=['GET'])
+def api_rdm_devices():
+    """List all discovered RDM devices."""
+    with state.rdm_lock:
+        devices = [d.to_dict() for d in state.rdm_devices.values()]
+    return jsonify({
+        'devices': devices,
+        'discovery_running': state.rdm_discovery_running,
+        'last_discovery': state.rdm_last_discovery,
+        'device_count': len(devices),
+    })
+
+
+@app.route('/api/rdm/device/<uid_str>', methods=['GET'])
+def api_rdm_device_detail(uid_str):
+    """Get detailed info for a single RDM device."""
+    with state.rdm_lock:
+        device = state.rdm_devices.get(uid_str)
+    if device is None:
+        return jsonify({'error': 'Device not found'}), 404
+    return jsonify(device.to_dict())
+
+
+@app.route('/api/rdm/device/<uid_str>/address', methods=['POST'])
+def api_rdm_set_address(uid_str):
+    """Set the DMX start address of an RDM device."""
+    data = request.get_json(silent=True)
+    if not data or 'address' not in data:
+        return jsonify({'error': 'Missing address'}), 400
+    address = int(data['address'])
+    if not 1 <= address <= 512:
+        return jsonify({'error': 'Address must be 1-512'}), 400
+
+    resp = rdm_set_dmx_address(uid_str, address)
+    if resp and resp.valid and resp.is_ack:
+        return jsonify({'success': True, 'address': address})
+    elif resp and resp.valid and resp.is_nack:
+        return jsonify({'error': f'Device NACK: reason {resp.nack_reason}'}), 400
+    return jsonify({'error': 'No response from device'}), 504
+
+
+@app.route('/api/rdm/device/<uid_str>/personality', methods=['POST'])
+def api_rdm_set_personality(uid_str):
+    """Set the DMX personality (channel mode) of an RDM device."""
+    data = request.get_json(silent=True)
+    if not data or 'personality' not in data:
+        return jsonify({'error': 'Missing personality'}), 400
+    personality = int(data['personality'])
+
+    resp = rdm_set_personality(uid_str, personality)
+    if resp and resp.valid and resp.is_ack:
+        return jsonify({'success': True, 'personality': personality})
+    elif resp and resp.valid and resp.is_nack:
+        return jsonify({'error': f'Device NACK: reason {resp.nack_reason}'}), 400
+    return jsonify({'error': 'No response from device'}), 504
+
+
+@app.route('/api/rdm/device/<uid_str>/identify', methods=['POST'])
+def api_rdm_identify(uid_str):
+    """Toggle identify mode on an RDM device (makes it blink/flash)."""
+    data = request.get_json(silent=True)
+    on = True
+    if data and 'on' in data:
+        on = bool(data['on'])
+
+    resp = rdm_identify_device(uid_str, on=on)
+    if resp and resp.valid and resp.is_ack:
+        return jsonify({'success': True, 'identify': on})
+    elif resp and resp.valid and resp.is_nack:
+        return jsonify({'error': f'Device NACK: reason {resp.nack_reason}'}), 400
+    return jsonify({'error': 'No response from device'}), 504
+
+
+@app.route('/api/rdm/device/<uid_str>/label', methods=['POST'])
+def api_rdm_set_label(uid_str):
+    """Set a custom label on an RDM device."""
+    data = request.get_json(silent=True)
+    if not data or 'label' not in data:
+        return jsonify({'error': 'Missing label'}), 400
+    label = str(data['label'])[:32]
+
+    resp = rdm_set_device_label(uid_str, label)
+    if resp and resp.valid and resp.is_ack:
+        return jsonify({'success': True, 'label': label})
+    elif resp and resp.valid and resp.is_nack:
+        return jsonify({'error': f'Device NACK: reason {resp.nack_reason}'}), 400
+    return jsonify({'error': 'No response from device'}), 504
+
+
+@app.route('/api/rdm/device/<uid_str>/sensors', methods=['GET'])
+def api_rdm_sensors(uid_str):
+    """Read all sensor values from an RDM device."""
+    with state.rdm_lock:
+        device = state.rdm_devices.get(uid_str)
+    if device is None:
+        return jsonify({'error': 'Device not found'}), 404
+
+    sensors = []
+    for i in range(device.sensor_count):
+        value = rdm_get_sensor_value(uid_str, i)
+        if value:
+            sensors.append(value)
+
+    return jsonify({'sensors': sensors})
+
+
+@app.route('/api/rdm/device/<uid_str>/refresh', methods=['POST'])
+def api_rdm_refresh_device(uid_str):
+    """Re-fetch all info for a single RDM device."""
+    with state.rdm_lock:
+        device = state.rdm_devices.get(uid_str)
+    if device is None:
+        return jsonify({'error': 'Device not found'}), 404
+
+    _rdm_fetch_device_info(device)
+    device.last_seen = time.monotonic()
+    return jsonify(device.to_dict())
+
+
+# ============================================
 # Health Check
 # ============================================
 
@@ -2271,6 +2849,9 @@ def api_health():
         'gpio_available': GPIO_AVAILABLE,
         'gpio_ready': state.gpio_ready,
         'safe_to_operate': is_safe_to_operate(),
+        'rdm_supported': state.dmx_driver == "enttec_pro",
+        'rdm_device_count': len(state.rdm_devices),
+        'rdm_discovery_running': state.rdm_discovery_running,
     }), status_code
 
 # ============================================

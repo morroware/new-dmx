@@ -510,6 +510,28 @@
                 <button class="btn-primary btn-sm" style="margin-top: 12px;" onclick="saveArtnetConfig()">Save Art-Net Settings</button>
 
                 <div style="margin-top: 25px; padding-top: 20px; border-top: 1px solid #2a2a3a;">
+                    <h2>RDM Device Management</h2>
+                    <p style="color: #71717a; font-size: 13px; margin-bottom: 12px;">
+                        Discover and manage RDM-capable fixtures on the DMX bus. Requires ENTTEC DMX USB Pro.
+                        RDM enables two-way communication to remotely set DMX addresses, change personalities (channel modes),
+                        identify fixtures, and read sensor data — all without touching DIP switches.
+                    </p>
+                    <div id="rdm-no-pro" style="display: none; color: #f59e0b; font-size: 13px; margin-bottom: 12px;">
+                        RDM is not available — ENTTEC DMX USB Pro not connected.
+                    </div>
+                    <div id="rdm-controls">
+                        <button class="btn-primary btn-sm" onclick="rdmDiscover()" id="rdm-discover-btn">
+                            Discover Devices
+                        </button>
+                        <span id="rdm-status" style="color: #71717a; font-size: 12px; margin-left: 10px;"></span>
+
+                        <div id="rdm-devices-container" style="margin-top: 16px;">
+                            <div id="rdm-devices-list"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <div style="margin-top: 25px; padding-top: 20px; border-top: 1px solid #2a2a3a;">
                     <h2>Fixture Profile</h2>
                     <p style="color: #71717a; font-size: 13px; margin-bottom: 12px;">
                         Apply a generic fixture profile to quickly label channels. Profiles are starting templates and can be customized after applying.
@@ -1632,6 +1654,9 @@
                         card.classList.remove('active');
                     }
                 });
+
+                // RDM availability
+                rdmUpdateAvailability(data);
             })
             .catch(err => {
                 consecutiveErrors++;
@@ -1803,6 +1828,286 @@
                 renderChannels();
                 updateStatus();
             });
+    }
+
+    // ============================================
+    // RDM Device Management
+    // ============================================
+
+    let rdmDevices = [];
+    let rdmDiscoveryPollTimer = null;
+    let rdmIdentifyState = {};  // uid -> boolean
+
+    function rdmDiscover() {
+        const btn = document.getElementById('rdm-discover-btn');
+        const status = document.getElementById('rdm-status');
+        btn.disabled = true;
+        btn.textContent = 'Discovering...';
+        status.textContent = 'Scanning DMX bus for RDM devices...';
+
+        fetch('/api/rdm/discover', {method: 'POST', headers})
+            .then(r => r.json())
+            .then(data => {
+                if (data.success) {
+                    // Poll for completion
+                    rdmPollDiscovery();
+                } else {
+                    status.textContent = data.error || 'Discovery failed';
+                    btn.disabled = false;
+                    btn.textContent = 'Discover Devices';
+                }
+            })
+            .catch(err => {
+                status.textContent = 'Error: ' + err.message;
+                btn.disabled = false;
+                btn.textContent = 'Discover Devices';
+            });
+    }
+
+    function rdmPollDiscovery() {
+        if (rdmDiscoveryPollTimer) clearTimeout(rdmDiscoveryPollTimer);
+
+        fetch('/api/rdm/devices', {headers})
+            .then(r => r.json())
+            .then(data => {
+                rdmDevices = data.devices || [];
+                rdmRenderDevices();
+
+                if (data.discovery_running) {
+                    document.getElementById('rdm-status').textContent =
+                        `Discovering... (${rdmDevices.length} found so far)`;
+                    rdmDiscoveryPollTimer = setTimeout(rdmPollDiscovery, 1000);
+                } else {
+                    const btn = document.getElementById('rdm-discover-btn');
+                    btn.disabled = false;
+                    btn.textContent = 'Discover Devices';
+                    document.getElementById('rdm-status').textContent =
+                        rdmDevices.length > 0
+                            ? `Found ${rdmDevices.length} device(s)`
+                            : 'No RDM devices found on bus';
+                }
+            })
+            .catch(() => {
+                document.getElementById('rdm-discover-btn').disabled = false;
+                document.getElementById('rdm-discover-btn').textContent = 'Discover Devices';
+            });
+    }
+
+    function rdmRenderDevices() {
+        const container = document.getElementById('rdm-devices-list');
+        if (rdmDevices.length === 0) {
+            container.innerHTML = '';
+            return;
+        }
+
+        let html = '<table style="width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 8px;">';
+        html += '<thead><tr style="border-bottom: 1px solid #2a2a3a; color: #a1a1aa;">';
+        html += '<th style="text-align: left; padding: 6px 8px;">UID</th>';
+        html += '<th style="text-align: left; padding: 6px 8px;">Label</th>';
+        html += '<th style="text-align: left; padding: 6px 8px;">Model</th>';
+        html += '<th style="text-align: center; padding: 6px 8px;">Address</th>';
+        html += '<th style="text-align: center; padding: 6px 8px;">Personality</th>';
+        html += '<th style="text-align: center; padding: 6px 8px;">Actions</th>';
+        html += '</tr></thead><tbody>';
+
+        rdmDevices.forEach(dev => {
+            const isIdentifying = rdmIdentifyState[dev.uid] || false;
+            html += `<tr style="border-bottom: 1px solid #1e1e2e;">`;
+            html += `<td style="padding: 8px; font-family: monospace; color: #60a5fa; font-size: 11px;">${dev.uid}</td>`;
+            html += `<td style="padding: 8px;">`;
+            html += `<span id="rdm-label-${dev.uid}" style="cursor: pointer; border-bottom: 1px dashed #4a4a5a;" onclick="rdmEditLabel('${dev.uid}')" title="Click to edit">${dev.device_label || '(unnamed)'}</span>`;
+            html += `</td>`;
+            html += `<td style="padding: 8px; color: #a1a1aa;">${dev.manufacturer_label ? dev.manufacturer_label + ' ' : ''}${dev.model_description || ''}</td>`;
+            html += `<td style="padding: 8px; text-align: center;">`;
+            html += `<input type="number" min="1" max="512" value="${dev.dmx_start_address}" `;
+            html += `style="width: 60px; background: #1a1a2e; border: 1px solid #2a2a3a; color: #e4e4e7; border-radius: 4px; padding: 2px 6px; text-align: center;" `;
+            html += `onchange="rdmSetAddress('${dev.uid}', this.value)" title="DMX Start Address">`;
+            html += `</td>`;
+
+            // Personality selector
+            html += `<td style="padding: 8px; text-align: center;">`;
+            if (dev.personalities && Object.keys(dev.personalities).length > 0) {
+                html += `<select style="background: #1a1a2e; border: 1px solid #2a2a3a; color: #e4e4e7; border-radius: 4px; padding: 2px 4px; font-size: 12px;" `;
+                html += `onchange="rdmSetPersonality('${dev.uid}', this.value)">`;
+                for (const [num, info] of Object.entries(dev.personalities)) {
+                    const selected = parseInt(num) === dev.current_personality ? ' selected' : '';
+                    html += `<option value="${num}"${selected}>${num}: ${info.description} (${info.footprint}ch)</option>`;
+                }
+                html += `</select>`;
+            } else {
+                html += `${dev.current_personality}/${dev.personality_count}`;
+            }
+            html += `</td>`;
+
+            // Actions
+            html += `<td style="padding: 8px; text-align: center; white-space: nowrap;">`;
+            html += `<button class="btn-sm" style="font-size: 11px; padding: 2px 8px; margin: 0 2px; ${isIdentifying ? 'background: #f59e0b; color: #000;' : ''}" `;
+            html += `onclick="rdmIdentify('${dev.uid}')" title="Blink/flash this fixture">${isIdentifying ? 'Stop' : 'Identify'}</button>`;
+            html += `<button class="btn-sm" style="font-size: 11px; padding: 2px 8px; margin: 0 2px;" `;
+            html += `onclick="rdmRefreshDevice('${dev.uid}')" title="Re-read device info">Refresh</button>`;
+            if (dev.sensor_count > 0) {
+                html += `<button class="btn-sm" style="font-size: 11px; padding: 2px 8px; margin: 0 2px;" `;
+                html += `onclick="rdmReadSensors('${dev.uid}')" title="Read sensor values">Sensors</button>`;
+            }
+            html += `</td>`;
+            html += `</tr>`;
+
+            // Expandable detail row (software version, device info)
+            html += `<tr style="border-bottom: 1px solid #1e1e2e;"><td colspan="6" style="padding: 2px 8px 8px 8px;">`;
+            html += `<span style="color: #52525b; font-size: 11px;">`;
+            if (dev.software_version_label) html += `SW: ${dev.software_version_label} &nbsp; `;
+            if (dev.device_info) {
+                html += `Footprint: ${dev.device_info.dmx_footprint}ch &nbsp; `;
+                html += `Sensors: ${dev.device_info.sensor_count} &nbsp; `;
+                html += `Sub-devices: ${dev.device_info.sub_device_count}`;
+            }
+            html += `</span>`;
+            html += `<div id="rdm-sensors-${dev.uid}" style="margin-top: 4px;"></div>`;
+            html += `</td></tr>`;
+        });
+
+        html += '</tbody></table>';
+        container.innerHTML = html;
+    }
+
+    function rdmSetAddress(uid, address) {
+        address = parseInt(address);
+        if (isNaN(address) || address < 1 || address > 512) {
+            showToast('Invalid address (1-512)');
+            return;
+        }
+        fetch(`/api/rdm/device/${uid}/address`, {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({address})
+        })
+        .then(r => r.json())
+        .then(data => {
+            if (data.success) showToast(`Address set to ${address}`);
+            else showToast(data.error || 'Failed to set address');
+        })
+        .catch(err => showToast('Error: ' + err.message));
+    }
+
+    function rdmSetPersonality(uid, personality) {
+        personality = parseInt(personality);
+        fetch(`/api/rdm/device/${uid}/personality`, {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({personality})
+        })
+        .then(r => r.json())
+        .then(data => {
+            if (data.success) {
+                showToast(`Personality changed to ${personality}`);
+                // Refresh device to update footprint info
+                rdmRefreshDevice(uid);
+            } else {
+                showToast(data.error || 'Failed to change personality');
+            }
+        })
+        .catch(err => showToast('Error: ' + err.message));
+    }
+
+    function rdmIdentify(uid) {
+        const isOn = rdmIdentifyState[uid] || false;
+        const newState = !isOn;
+        rdmIdentifyState[uid] = newState;
+
+        fetch(`/api/rdm/device/${uid}/identify`, {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({on: newState})
+        })
+        .then(r => r.json())
+        .then(data => {
+            if (data.success) {
+                showToast(newState ? 'Identify ON' : 'Identify OFF');
+                rdmRenderDevices();
+            } else {
+                rdmIdentifyState[uid] = isOn;
+                showToast(data.error || 'Identify failed');
+            }
+        })
+        .catch(err => {
+            rdmIdentifyState[uid] = isOn;
+            showToast('Error: ' + err.message);
+        });
+    }
+
+    function rdmEditLabel(uid) {
+        const dev = rdmDevices.find(d => d.uid === uid);
+        const currentLabel = dev ? dev.device_label : '';
+        const newLabel = prompt('Set device label (max 32 chars):', currentLabel);
+        if (newLabel === null) return;
+
+        fetch(`/api/rdm/device/${uid}/label`, {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({label: newLabel})
+        })
+        .then(r => r.json())
+        .then(data => {
+            if (data.success) {
+                showToast('Label updated');
+                if (dev) dev.device_label = newLabel;
+                rdmRenderDevices();
+            } else {
+                showToast(data.error || 'Failed to set label');
+            }
+        })
+        .catch(err => showToast('Error: ' + err.message));
+    }
+
+    function rdmRefreshDevice(uid) {
+        fetch(`/api/rdm/device/${uid}/refresh`, {method: 'POST', headers})
+            .then(r => r.json())
+            .then(data => {
+                if (data.uid) {
+                    const idx = rdmDevices.findIndex(d => d.uid === uid);
+                    if (idx >= 0) rdmDevices[idx] = data;
+                    rdmRenderDevices();
+                    showToast('Device info refreshed');
+                } else {
+                    showToast(data.error || 'Refresh failed');
+                }
+            })
+            .catch(err => showToast('Error: ' + err.message));
+    }
+
+    function rdmReadSensors(uid) {
+        const container = document.getElementById('rdm-sensors-' + uid);
+        if (!container) return;
+        container.innerHTML = '<span style="color: #71717a; font-size: 11px;">Reading sensors...</span>';
+
+        fetch(`/api/rdm/device/${uid}/sensors`, {headers})
+            .then(r => r.json())
+            .then(data => {
+                if (data.sensors && data.sensors.length > 0) {
+                    let html = '<table style="font-size: 11px; color: #a1a1aa;">';
+                    data.sensors.forEach((s, i) => {
+                        html += `<tr><td style="padding: 2px 8px;">Sensor ${s.sensor_number !== undefined ? s.sensor_number : i}:</td>`;
+                        html += `<td style="padding: 2px 8px; color: #60a5fa;">${s.present_value}</td>`;
+                        html += `<td style="padding: 2px 8px;">(low: ${s.lowest_value}, high: ${s.highest_value})</td></tr>`;
+                    });
+                    html += '</table>';
+                    container.innerHTML = html;
+                } else {
+                    container.innerHTML = '<span style="color: #71717a; font-size: 11px;">No sensor data</span>';
+                }
+            })
+            .catch(err => {
+                container.innerHTML = `<span style="color: #ef4444; font-size: 11px;">Error: ${err.message}</span>`;
+            });
+    }
+
+    // Check if RDM is supported on status update
+    function rdmUpdateAvailability(statusData) {
+        const noPro = document.getElementById('rdm-no-pro');
+        const controls = document.getElementById('rdm-controls');
+        if (statusData.rdm_supported) {
+            noPro.style.display = 'none';
+            controls.style.display = '';
+        } else {
+            noPro.style.display = '';
+            controls.style.display = 'none';
+        }
     }
 
     initialLoad();
