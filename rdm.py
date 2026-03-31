@@ -297,18 +297,19 @@ def build_rdm_packet(dest_uid, command_class, pid, data=b'',
                      sub_device=0, port_id=1, source_uid=None):
     """Build a complete RDM packet with checksum.
 
-    Returns the full packet bytes starting from RDM_START_CODE.
+    Returns packet bytes starting at the RDM sub-start code (0x01).
     The ENTTEC Pro expects everything after the DMX start code (0xCC)
-    to be passed as data for Label 7.
+    to be passed as data for Label 7/11.
     """
     if source_uid is None:
         source_uid = CONTROLLER_UID
 
     tn = _next_transaction()
     pdl = len(data)
-    # Message length: from start code to end of data (before checksum)
-    # = 24 bytes header + PDL
-    msg_length = 24 + pdl
+    # RDM message length field counts bytes from Sub-Start Code through
+    # Parameter Data (it does NOT include the 2-byte checksum).
+    # Base size with no parameter data is 23 bytes.
+    msg_length = 23 + pdl
 
     packet = bytearray()
     packet.append(RDM_SUB_START_CODE)           # Slot 0: Sub-start code
