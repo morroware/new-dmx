@@ -2738,7 +2738,10 @@ def api_rdm_set_address(uid_str):
     data = request.get_json(silent=True)
     if not data or 'address' not in data:
         return jsonify({'error': 'Missing address'}), 400
-    address = int(data['address'])
+    try:
+        address = int(data['address'])
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Address must be an integer (1-512)'}), 400
     if not 1 <= address <= 512:
         return jsonify({'error': 'Address must be 1-512'}), 400
 
@@ -2756,7 +2759,12 @@ def api_rdm_set_personality(uid_str):
     data = request.get_json(silent=True)
     if not data or 'personality' not in data:
         return jsonify({'error': 'Missing personality'}), 400
-    personality = int(data['personality'])
+    try:
+        personality = int(data['personality'])
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Personality must be an integer'}), 400
+    if not 1 <= personality <= 255:
+        return jsonify({'error': 'Personality must be 1-255'}), 400
 
     resp = rdm_set_personality(uid_str, personality)
     if resp and resp.valid and resp.is_ack:
