@@ -155,6 +155,7 @@ fi
 info "Installing application to ${INSTALL_DIR}..."
 mkdir -p "$INSTALL_DIR"
 cp -f "$SCRIPT_DIR"/app.py            "$INSTALL_DIR/"
+cp -f "$SCRIPT_DIR"/rdm.py            "$INSTALL_DIR/"
 cp -f "$SCRIPT_DIR"/index.html        "$INSTALL_DIR/"
 cp -f "$SCRIPT_DIR"/start.sh          "$INSTALL_DIR/"
 cp -f "$SCRIPT_DIR"/requirements.txt  "$INSTALL_DIR/"
