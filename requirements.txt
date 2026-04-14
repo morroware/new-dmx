@@ -1,5 +1,11 @@
 flask>=2.0
-gunicorn>=21.2
+# Pin gunicorn < 25: 25.x added a "Control socket" feature that spawns a
+# background thread in the master process, causing a post-fork deadlock in
+# Python's logging module ("Booting worker..." log call hangs on a futex
+# inside the freshly-forked child, before the app is ever imported).
+# Symptom: gunicorn logs "Listening at: http://0.0.0.0:5000" then nothing,
+# port 5000 accepts connections but never responds.
+gunicorn>=21.2,<25
 pyserial>=3.5
 pyftdi>=0.54
 gpiod>=2.0,<3.0

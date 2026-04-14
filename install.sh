@@ -207,7 +207,9 @@ sudo -u "$RUN_USER" python3 -m venv "$INSTALL_DIR/venv"
 
 info "Installing Python dependencies..."
 sudo -u "$RUN_USER" "$INSTALL_DIR/venv/bin/pip" install --upgrade pip -q
-sudo -u "$RUN_USER" "$INSTALL_DIR/venv/bin/pip" install -r "$INSTALL_DIR/requirements.txt" -q
+# --upgrade so a tightened upper bound in requirements.txt (e.g. gunicorn<25)
+# actually downgrades a previously-installed version on existing installs.
+sudo -u "$RUN_USER" "$INSTALL_DIR/venv/bin/pip" install --upgrade -r "$INSTALL_DIR/requirements.txt" -q
 ok "Python dependencies installed"
 
 # ------------------------------------------
