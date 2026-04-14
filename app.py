@@ -3034,7 +3034,24 @@ def _on_sigterm(_signum, _frame):
 
 
 signal.signal(signal.SIGTERM, _on_sigterm)
-_initialize()
+
+
+def _initialize_safely():
+    """Run _initialize() with exception handling so a hardware-init failure
+    cannot kill the Gunicorn worker (which would prevent the web UI from
+    ever serving)."""
+    try:
+        _initialize()
+    except Exception as e:
+        logger.exception("Initialization failed: %s", e)
+
+
+# Run hardware initialization in a background thread so that module import
+# returns immediately and Flask can serve requests right away.  Without this,
+# any blocking call inside _initialize() (FTDI USB enumeration, GPIO line
+# request, serial probe) would prevent the Gunicorn worker from ever calling
+# accept(), making the web UI unreachable even though port 5000 is listening.
+Thread(target=_initialize_safely, name="dmx-init", daemon=True).start()
 
 
 def main():
